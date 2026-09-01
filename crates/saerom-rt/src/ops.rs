@@ -19,15 +19,117 @@ unsafe fn name_of<'a>(bytes: *const u8, len: usize) -> &'a str {
     std::str::from_utf8_unchecked(std::slice::from_raw_parts(bytes, len))
 }
 
+#[repr(C)]
+pub struct Source {
+    name: *const u8,
+    name_len: usize,
+    text: *const u8,
+    text_len: usize,
+}
+
+/// 컴파일된 코드가 실패할 수 있는 연산 앞에서 직접 써 넣는다.
+/// 모듈(16) | 줄(24) | 칸(12) | 너비(12)
+#[no_mangle]
+pub static mut SR_POS: u64 = 0;
+
+static mut SOURCES: (*const Source, usize) = (std::ptr::null(), 0);
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_sources(table: *const Source, count: usize) {
+    SOURCES = (table, count);
+}
+
+unsafe fn source_at(index: usize) -> Option<(&'static str, &'static str)> {
+    let (table, count) = SOURCES;
+    if table.is_null() || index >= count {
+        return None;
+    }
+    let found = &*table.add(index);
+    Some((
+        name_of(found.name, found.name_len),
+        name_of(found.text, found.text_len),
+    ))
+}
+
+#[repr(C)]
+pub struct Site {
+    name: *const u8,
+    name_len: usize,
+}
+
+pub const FRAMES: usize = 1024;
+
+#[no_mangle]
+pub static mut SR_FRAMES: [*const Site; FRAMES] = [std::ptr::null(); FRAMES];
+
+#[no_mangle]
+pub static mut SR_AT: [u64; FRAMES] = [0; FRAMES];
+
+#[no_mangle]
+pub static mut SR_DEPTH: u32 = 0;
+
+fn spot(packed: u64) -> Option<String> {
+    let module = (packed >> 48) as usize;
+    let line = ((packed >> 24) & 0xFF_FFFF) as usize;
+    let col = ((packed >> 12) & 0xFFF) as usize;
+    if line == 0 {
+        return None;
+    }
+    let (name, _) = unsafe { source_at(module) }?;
+    Some(format!("{name}:{line}:{}", col + 1))
+}
+
+fn frame_name(level: usize) -> String {
+    let site =
+        unsafe { std::ptr::read((&raw const SR_FRAMES).cast::<*const Site>().add(level)) };
+    if site.is_null() {
+        return "<모름>".to_string();
+    }
+    let site = unsafe { &*site };
+    unsafe { name_of(site.name, site.name_len) }.to_string()
+}
+
+fn trace() -> String {
+    let depth = unsafe { std::ptr::read(&raw const SR_DEPTH) } as usize;
+    let shown = depth.min(FRAMES);
+    let mut out = String::from("역추적:\n");
+    let mut here = unsafe { std::ptr::read(&raw const SR_POS) };
+    for level in (0..shown).rev() {
+        out.push_str(&format!(
+            "  {:>2}: {}\n",
+            shown - 1 - level,
+            frame_name(level)
+        ));
+        if let Some(at) = spot(here) {
+            out.push_str(&format!("        at {at}\n"));
+        }
+        here = unsafe { std::ptr::read((&raw const SR_AT).cast::<u64>().add(level)) };
+    }
+    out.push_str(&format!("  {shown:>2}: <맨바깥>\n"));
+    if let Some(at) = spot(here) {
+        out.push_str(&format!("        at {at}\n"));
+    }
+    out
+}
+
 fn fail(kind: &str, message: String) -> ! {
     let _ = std::io::stdout().flush();
-    eprintln!("{kind}: {message}");
+    let here = unsafe { std::ptr::read(&raw const SR_POS) };
+    match spot(here) {
+        Some(at) => eprintln!("{at}: {kind}: {message}"),
+        None => eprintln!("{kind}: {message}"),
+    }
+    if std::env::var_os("SAEROM_BACKTRACE").is_some() {
+        eprint!("{}", trace());
+    } else {
+        eprintln!("참고: SAEROM_BACKTRACE=1 로 역추적을 볼 수 있음");
+    }
     std::process::exit(1);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_stop(message: *const Value) {
-    fail("멈춤", to_text(at(message)));
+    fail("종료", to_text(at(message)));
 }
 
 fn numbers(verb: &str, values: [&Value; 2]) {

@@ -120,6 +120,8 @@ pub struct Function {
 
 pub struct Module {
     pub name: Rc<str>,
+    pub path: Rc<str>,
+    pub source: Rc<str>,
     pub init: Vec<Stmt>,
     pub nouns: HashMap<Symbol, FuncId>,
 }

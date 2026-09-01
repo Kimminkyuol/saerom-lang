@@ -23,6 +23,9 @@ struct Emitter<'a> {
     temps: u32,
     labels: u32,
     loops: Vec<(String, String)>,
+    marked: Option<u64>,
+    sites: String,
+    site_count: u32,
     module: ModuleId,
     errors: Vec<Diag>,
 }
@@ -132,6 +135,11 @@ declare void @sr_open(ptr, ptr)
 declare void @sr_write(ptr, ptr)
 declare void @sr_close(ptr)
 declare void @sr_stop(ptr)
+declare void @sr_sources(ptr, i64)
+@SR_POS = external global i64
+@SR_FRAMES = external global [1024 x ptr]
+@SR_AT = external global [1024 x i64]
+@SR_DEPTH = external global i32
 ";
 
 impl<'a> Emitter<'a> {
@@ -146,6 +154,9 @@ impl<'a> Emitter<'a> {
             temps: 0,
             labels: 0,
             loops: Vec::new(),
+            marked: None,
+            sites: String::new(),
+            site_count: 0,
             module: 0,
             errors: Vec::new(),
         }
@@ -156,7 +167,61 @@ impl<'a> Emitter<'a> {
     }
 
     fn mark(&mut self, label: &str) {
+        self.marked = None;
         let _ = writeln!(self.body, "{label}:");
+    }
+
+    fn enter(&mut self, name: &str, at: Option<crate::diag::Span>) -> String {
+        let (text, len) = self.constant(name);
+        let site = format!("@.site{}", self.site_count);
+        self.site_count += 1;
+        let _ = writeln!(
+            self.sites,
+            "{site} = private constant %Site {{ ptr {text}, i64 {len} }}"
+        );
+        let here = match at {
+            Some(span) => self.packed(span).to_string(),
+            None => {
+                let loaded = self.temp();
+                self.line(&format!("{loaded} = load i64, ptr @SR_POS, align 8"));
+                loaded
+            }
+        };
+        let depth = self.temp();
+        self.line(&format!("{depth} = load i32, ptr @SR_DEPTH, align 4"));
+        let wrapped = self.temp();
+        self.line(&format!("{wrapped} = and i32 {depth}, 1023"));
+        let cell = self.temp();
+        self.line(&format!(
+            "{cell} = getelementptr inbounds [1024 x ptr], ptr @SR_FRAMES, i64 0, i32 {wrapped}"
+        ));
+        self.line(&format!("store ptr {site}, ptr {cell}, align 8"));
+        let mark = self.temp();
+        self.line(&format!(
+            "{mark} = getelementptr inbounds [1024 x i64], ptr @SR_AT, i64 0, i32 {wrapped}"
+        ));
+        self.line(&format!("store i64 {here}, ptr {mark}, align 8"));
+        let next = self.temp();
+        self.line(&format!("{next} = add i32 {depth}, 1"));
+        self.line(&format!("store i32 {next}, ptr @SR_DEPTH, align 4"));
+        depth
+    }
+
+    fn packed(&self, span: crate::diag::Span) -> u64 {
+        let width = span.end.saturating_sub(span.col).min(0xFFF);
+        ((self.module as u64) << 48)
+            | ((span.line as u64 & 0xFF_FFFF) << 24)
+            | ((span.col as u64 & 0xFFF) << 12)
+            | width as u64
+    }
+
+    fn at(&mut self, span: crate::diag::Span) {
+        let packed = self.packed(span);
+        if self.marked == Some(packed) {
+            return;
+        }
+        self.marked = Some(packed);
+        self.line(&format!("store i64 {packed}, ptr @SR_POS, align 8"));
     }
 
     fn label(&mut self, tag: &str) -> String {
@@ -227,22 +292,41 @@ impl<'a> Emitter<'a> {
     }
 
     fn finish(&mut self, triple: &str) -> String {
+        let mut table = Vec::new();
+        for id in 0..self.program.modules.len() {
+            let module = &self.program.modules[id];
+            let (path, path_len) = self.constant(module.path.as_ref());
+            let (text, text_len) = self.constant(module.source.as_ref());
+            table.push(format!(
+                "%Source {{ ptr {path}, i64 {path_len}, ptr {text}, i64 {text_len} }}"
+            ));
+        }
+        let count = table.len();
         let mut out = String::new();
         if !triple.is_empty() {
             let _ = writeln!(out, "target triple = \"{triple}\"\n");
         }
-        let _ = writeln!(out, "%Value = type {{ i64, i64 }}\n");
+        let _ = writeln!(out, "%Value = type {{ i64, i64 }}");
+        let _ = writeln!(out, "%Source = type {{ ptr, i64, ptr, i64 }}");
+        let _ = writeln!(out, "%Site = type {{ ptr, i64 }}\n");
         let _ = writeln!(
             out,
             "@globals = internal global [{} x %Value] zeroinitializer\n",
             self.program.globals.max(1)
         );
         out.push_str(&self.constants);
+        out.push_str(&self.sites);
+        let _ = writeln!(
+            out,
+            "@sources = internal constant [{count} x %Source] [{}]",
+            table.join(", ")
+        );
         out.push('\n');
         out.push_str(DECLARES);
         out.push('\n');
         out.push_str(&self.functions);
         let _ = writeln!(out, "define i32 @main() {{\nentry:");
+        let _ = writeln!(out, "  call void @sr_sources(ptr @sources, i64 {count})");
         for id in &self.program.order {
             let _ = writeln!(out, "  call void @mod_{id}()");
         }
@@ -255,6 +339,7 @@ impl<'a> Emitter<'a> {
         self.allocas.clear();
         self.temps = 0;
         self.module = module;
+        self.marked = None;
         self.loops.clear();
     }
 
@@ -299,7 +384,9 @@ impl<'a> Emitter<'a> {
             let miss = self.label("miss");
             self.line(&format!("br i1 {test}, label %{hit}, label %{miss}"));
             self.mark(&hit);
+            let depth = self.enter(&field, None);
             self.line(&format!("call void @fn_{func}(ptr %out, ptr %owner)"));
+            self.line(&format!("store i32 {depth}, ptr @SR_DEPTH, align 4"));
             self.line("ret i8 1");
             self.mark(&miss);
         }
@@ -416,8 +503,8 @@ impl<'a> Emitter<'a> {
                 stop,
                 step,
                 body,
-                ..
-            } => self.range(*place, start, stop, step.as_ref(), body),
+                span,
+            } => self.range(*place, start, stop, step.as_ref(), body, *span),
             Stmt::While { test, body } => self.while_loop(test, body),
             Stmt::Break | Stmt::Continue => {
                 let Some((step, end)) = self.loops.last().cloned() else {
@@ -502,6 +589,7 @@ impl<'a> Emitter<'a> {
         stop: &'a Expr,
         step: Option<&'a Expr>,
         body: &'a [Stmt],
+        span: crate::diag::Span,
     ) {
         let start = self.expr(start);
         let stop = self.expr(stop);
@@ -514,6 +602,7 @@ impl<'a> Emitter<'a> {
             }
         };
         let list = self.slot();
+        self.at(span);
         self.line(&format!(
             "call void @sr_range(ptr {list}, ptr {start}, ptr {stop}, ptr {step})"
         ));
@@ -642,8 +731,9 @@ impl<'a> Emitter<'a> {
                 ));
                 out
             }
-            Expr::Field { owner, field, .. } => {
+            Expr::Field { owner, field, span } => {
                 let owner = self.expr(owner);
+                self.at(*span);
                 let (name, len) = self.name_of(*field);
                 let nouns = self.nouns_argument(self.module);
                 let out = self.slot();
@@ -652,16 +742,17 @@ impl<'a> Emitter<'a> {
                 ));
                 out
             }
-            Expr::Index { owner, place, .. } => {
+            Expr::Index { owner, place, span } => {
                 let owner = self.expr(owner);
                 let place = self.expr(place);
+                self.at(*span);
                 let out = self.slot();
                 self.line(&format!(
                     "call void @sr_index(ptr {out}, ptr {owner}, ptr {place})"
                 ));
                 out
             }
-            Expr::Call { callee, args, .. } => self.call(*callee, args),
+            Expr::Call { callee, args, span } => self.call(*callee, args, *span),
             Expr::Not(value) => {
                 let value = self.expr(value);
                 let out = self.slot();
@@ -711,11 +802,12 @@ impl<'a> Emitter<'a> {
         out
     }
 
-    fn call(&mut self, callee: Callee, args: &'a [Expr]) -> String {
+    fn call(&mut self, callee: Callee, args: &'a [Expr], span: crate::diag::Span) -> String {
         let mut given = Vec::with_capacity(args.len());
         for arg in args {
             given.push(self.expr(arg));
         }
+        self.at(span);
         match callee {
             Callee::Op(op) => {
                 let found = operation(op);
@@ -745,7 +837,10 @@ impl<'a> Emitter<'a> {
                 let out = self.slot();
                 let mut passed = vec![format!("ptr {out}")];
                 passed.extend(given.iter().map(|name| format!("ptr {name}")));
+                let name = self.program.functions[func as usize].name.to_string();
+                let depth = self.enter(&name, Some(span));
                 self.line(&format!("call void @fn_{func}({})", passed.join(", ")));
+                self.line(&format!("store i32 {depth}, ptr @SR_DEPTH, align 4"));
                 let function = &self.program.functions[func as usize];
                 let (kind, name) = (function.kind, function.name.to_string());
                 match kind {

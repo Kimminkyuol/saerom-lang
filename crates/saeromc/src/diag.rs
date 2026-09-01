@@ -51,15 +51,12 @@ impl Diag {
     }
 
     pub fn render(&self, source: &str, path: &str) -> String {
-        let mut out = format!(
-            "{}: {}\n  {}:{}:{}\n",
-            self.kind,
-            self.msg,
-            path,
-            self.span.line,
-            self.span.col + 1
-        );
-        if let Some(text) = source.lines().nth(self.span.line.saturating_sub(1)) {
+        let line = self.span.line;
+        let gutter = line.to_string().len();
+        let bar = " ".repeat(gutter);
+        let mut out = format!("{}: {}\n", self.kind, self.msg);
+        out.push_str(&format!("{bar}--> {path}:{line}:{}\n", self.span.col + 1));
+        if let Some(text) = source.lines().nth(line.saturating_sub(1)) {
             let pad: usize = text.chars().take(self.span.col).map(terminal_width).sum();
             let mark: usize = text
                 .chars()
@@ -67,15 +64,16 @@ impl Diag {
                 .take(self.span.end.saturating_sub(self.span.col).max(1))
                 .map(terminal_width)
                 .sum();
-            out.push_str(&format!("  {}\n", text));
+            out.push_str(&format!("{bar} |\n"));
+            out.push_str(&format!("{line} | {text}\n"));
             out.push_str(&format!(
-                "  {}{}\n",
+                "{bar} | {}{}\n",
                 " ".repeat(pad),
                 "^".repeat(mark.max(1))
             ));
         }
         if let Some(hint) = &self.hint {
-            out.push_str(&format!("  도움말: {}\n", hint));
+            out.push_str(&format!("{bar} = 도움말: {hint}\n"));
         }
         out
     }

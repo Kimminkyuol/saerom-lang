@@ -386,8 +386,15 @@ impl<'a> Resolver<'a> {
             .into_iter()
             .map(|(name, func)| (self.names.intern(&name), func))
             .collect();
+        let found = &loaded.units[unit];
+        let path = found
+            .path
+            .as_deref()
+            .map_or_else(|| found.name.clone(), |path| path.display().to_string());
         Module {
-            name: Rc::from(loaded.units[unit].name.as_str()),
+            name: Rc::from(found.name.as_str()),
+            path: Rc::from(path.as_str()),
+            source: Rc::from(found.source.as_str()),
             init,
             nouns,
         }

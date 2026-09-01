@@ -42,6 +42,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let mut only_ast = false;
     let mut only_check = false;
     let mut only_hir = false;
+    let mut tuning: Option<String> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -51,6 +52,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
             "--check" => only_check = true,
             "--dump-hir" => only_hir = true,
             "-o" => output = Some(PathBuf::from(rest.next().ok_or(Fault::Usage)?)),
+            "-O" | "-O0" | "-O1" | "-O2" | "-O3" | "-Os" => tuning = Some(arg.clone()),
             "-h" | "--help" => return Err(Fault::Usage),
             other if other.starts_with('-') => return Err(Fault::Usage),
             other => source_path = Some(other),
@@ -89,7 +91,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     } else {
         target_triple()
     };
-    let ir = saeromc::compile(&source, base_dir, &triple)
+    let ir = saeromc::compile(&source, Some(Path::new(path)), &triple)
         .map_err(|found| found.render(&source, path))?;
 
     if only_llvm {
@@ -98,7 +100,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     }
 
     let output = output.unwrap_or_else(|| Path::new(path).with_extension(""));
-    link(&ir, &output).map_err(Fault::Message)
+    link(&ir, &output, tuning.as_deref()).map_err(Fault::Message)
 }
 
 fn render(found: &[saeromc::diag::Diag], source: &str, path: &str) -> String {
@@ -119,12 +121,16 @@ fn target_triple() -> String {
         .unwrap_or_default()
 }
 
-fn link(ir: &str, output: &Path) -> Result<(), String> {
+fn link(ir: &str, output: &Path, tuning: Option<&str>) -> Result<(), String> {
     let ir_path = output.with_extension("ll");
     std::fs::write(&ir_path, ir)
         .map_err(|error| format!("{}를 쓸 수 없음: {error}\n", ir_path.display()))?;
     let runtime = runtime_archive()?;
-    let done = Command::new("clang")
+    let mut clang = Command::new("clang");
+    if let Some(tuning) = tuning {
+        clang.arg(tuning);
+    }
+    let done = clang
         .arg(&ir_path)
         .arg(&runtime)
         .arg("-o")
