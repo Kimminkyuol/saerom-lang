@@ -1,0 +1,14 @@
+[package]
+name = "saeromc"
+description = "새롬 컴파일러"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "saeromc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "saeromc"
+path = "src/main.rs"

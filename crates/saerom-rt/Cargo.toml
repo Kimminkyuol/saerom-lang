@@ -1,0 +1,9 @@
+[package]
+name = "saerom-rt"
+description = "새롬 런타임"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
