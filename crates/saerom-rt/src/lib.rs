@@ -1,7 +1,7 @@
 use std::io::Write;
 
 /// # Safety
-/// `ptr` 부터 `len` 바이트가 읽을 수 있는 자리여야 한다.
+/// `ptr` 부터 `len` 바이트가 읽을 수 있어야 함
 #[no_mangle]
 pub unsafe extern "C" fn sr_print_bytes(ptr: *const u8, len: usize) {
     if ptr.is_null() {

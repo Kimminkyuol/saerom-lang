@@ -73,7 +73,7 @@ pub const DOEDA_FORMS: &[(&str, &str)] = &[
     ("된", "adnominal_past"),
 ];
 
-/// 줄임꼴 `다`·`면` 은 일부러 뺐다. 넣으면 `20보다` 가 `20보` + `이다` 로 갈린다.
+/// `다`, `면` 넣지 말 것
 pub const COPULA: &[(&str, &str)] = &[
     ("이거나", "alternative"),
     ("이라는", "quotative"),
@@ -85,7 +85,7 @@ pub const COPULA: &[(&str, &str)] = &[
     ("인", "adnominal_past"),
 ];
 
-/// 닫힌 표에 두어야 `초과` 가 `초` + `과` 로 갈리지 않는다.
+/// `초` + `과` 방지
 pub const COMPARATIVES: &[(&str, &str, bool)] = &[
     ("이상", "작다", true),
     ("이하", "크다", true),
