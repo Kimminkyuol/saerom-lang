@@ -1,5 +1,7 @@
 use crate::diag::{Diag, Result, Span};
-use crate::words;
+use crate::hangul::{to_nfc, Ending, Pos};
+use crate::words::{self, FormTable};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Num {
@@ -8,15 +10,21 @@ pub enum Num {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum Part {
+    Text(String),
+    Expr { source: String, span: Span },
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Tok {
     Name(String),
     Verb {
         name: String,
-        pos: &'static str,
-        ending: &'static str,
+        pos: Pos,
+        ending: Ending,
     },
     Copula {
-        ending: &'static str,
+        ending: Ending,
     },
     Particle {
         role: &'static str,
@@ -25,7 +33,10 @@ pub enum Tok {
     Keyword(String),
     Number(Num),
     Str(String),
+    Template(Vec<Part>),
     Symbol(char),
+    Indent(usize),
+    Dedent(usize),
     Newline,
     Eof,
 }
@@ -47,13 +58,13 @@ impl Token {
 
 #[derive(Default, Clone)]
 pub struct Vocabulary {
-    pub names: Vec<String>,
+    pub names: HashSet<String>,
+    pub stems: HashSet<String>,
 }
 
-impl Vocabulary {
-    fn knows(&self, word: &str) -> bool {
-        self.names.iter().any(|n| n == word)
-    }
+struct Lexer {
+    names: HashSet<String>,
+    forms: FormTable,
 }
 
 #[derive(Clone, Copy)]
@@ -62,67 +73,226 @@ struct Splitting {
     take_copula: bool,
 }
 
-impl Splitting {
-    const WHOLE: Splitting = Splitting {
-        take_particle: true,
-        take_copula: true,
-    };
+pub fn ready(source: &str) -> String {
+    to_nfc(source).replace('\t', "    ")
 }
 
 pub fn tokenize(source: &str, vocab: &Vocabulary) -> Result<Vec<Token>> {
+    let source = ready(source);
+    let lexer = Lexer {
+        names: vocab.names.clone(),
+        forms: words::stem_forms(&vocab.stems),
+    };
+
+    let lines: Vec<&str> = source.split('\n').collect();
     let mut tokens = Vec::new();
-    for (index, text) in source.lines().enumerate() {
+    let mut indents = vec![0usize];
+    let mut at_statement_start = true;
+
+    for (index, text) in lines.iter().enumerate() {
         let line = index + 1;
-        let produced = scan_line(text, line, vocab)?;
-        let Some(last) = produced.last() else {
+        let chars: Vec<char> = text.chars().collect();
+        let depth = chars.iter().take_while(|&&c| c == ' ').count();
+        if chars[depth..].is_empty() || chars[depth] == '#' {
             continue;
-        };
-        let end = last.span.end;
+        }
+        if at_statement_start {
+            if depth > *indents.last().unwrap() {
+                indents.push(depth);
+                tokens.push(Token::new(Tok::Indent(depth), line, 0, depth));
+            }
+            while depth < *indents.last().unwrap() {
+                indents.pop();
+                tokens.push(Token::new(Tok::Dedent(depth), line, 0, depth));
+            }
+            if depth != *indents.last().unwrap() {
+                return Err(Diag::lex("들여쓰기가 맞지 않음", Span::new(line, 0, depth)));
+            }
+        }
+
+        let produced = lexer.scan_line(&chars, line)?;
+        at_statement_start = ends_statement(&produced);
+        let end = produced.last().map_or(0, |token| token.span.end);
         tokens.extend(produced);
-        tokens.push(Token::new(Tok::Newline, line, end, end));
+        if at_statement_start {
+            tokens.push(Token::new(Tok::Newline, line, end, end));
+        }
     }
-    let line = source.lines().count() + 1;
+
+    let line = lines.len();
+    while indents.len() > 1 {
+        indents.pop();
+        tokens.push(Token::new(Tok::Dedent(0), line, 0, 0));
+    }
     tokens.push(Token::new(Tok::Eof, line, 0, 0));
     Ok(tokens)
 }
 
-fn scan_line(text: &str, line: usize, vocab: &Vocabulary) -> Result<Vec<Token>> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == '#' {
-            break;
-        }
-        if ch.is_whitespace() {
-            i += 1;
-            continue;
-        }
-        if ch == '"' {
-            let (token, next) = scan_string(&chars, i, line)?;
-            out.push(token);
-            i = next;
-        } else if ch == '-' && matches!(chars.get(i + 1), Some(c) if c.is_ascii_digit()) {
-            let (token, next) = scan_number(&chars, i, line);
-            out.push(token);
-            i = next;
-        } else if "[],:.{}".contains(ch) {
-            out.push(Token::new(Tok::Symbol(ch), line, i, i + 1));
-            i += 1;
-        } else if is_word_char(ch) {
-            let j = word_end(&chars, i);
-            let chunk: String = chars[i..j].iter().collect();
-            out.extend(split_word(&chunk, line, i, j, Splitting::WHOLE, vocab)?);
-            i = j;
-        } else {
-            return Err(Diag::lex(
-                format!("쓸 수 없는 글자: {ch:?}"),
-                Span::new(line, i, i + 1),
-            ));
-        }
+fn ends_statement(produced: &[Token]) -> bool {
+    let Some(last) = produced.last() else {
+        return false;
+    };
+    if matches!(last.tok, Tok::Symbol('.') | Tok::Symbol(':')) {
+        return true;
     }
-    Ok(out)
+    produced.len() == 1
+        && matches!(
+            last.tok,
+            Tok::Number(_) | Tok::Str(_) | Tok::Template(_) | Tok::Keyword(_) | Tok::Name(_)
+        )
+}
+
+impl Lexer {
+    fn knows(&self, word: &str) -> bool {
+        self.names.contains(word)
+    }
+
+    fn scan_line(&self, chars: &[char], line: usize) -> Result<Vec<Token>> {
+        let mut out: Vec<Token> = Vec::new();
+        let mut brackets: Vec<char> = Vec::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '#' {
+                break;
+            }
+            if ch == ' ' {
+                i += 1;
+            } else if ch == '"' {
+                let (token, next) = scan_string(chars, i, line)?;
+                out.push(token);
+                i = next;
+            } else if ch == '-' && matches!(chars.get(i + 1), Some(c) if c.is_ascii_digit()) {
+                let j = digits_end(chars, i + 1);
+                let raw: String = chars[i..j].iter().collect();
+                out.push(Token::new(
+                    Tok::Number(number(&raw, line, i, j)?),
+                    line,
+                    i,
+                    j,
+                ));
+                i = j;
+            } else if "[],:.{}".contains(ch) {
+                match ch {
+                    '[' | '{' => brackets.push(ch),
+                    ']' | '}' => {
+                        brackets.pop();
+                    }
+                    _ => {}
+                }
+                out.push(Token::new(Tok::Symbol(ch), line, i, i + 1));
+                i += 1;
+            } else if is_word_char(ch) {
+                let j = word_end(chars, i);
+                let chunk: String = chars[i..j].iter().collect();
+                let splitting = Splitting {
+                    take_particle: !is_dict_key(&out, &brackets, chars, j),
+                    take_copula: true,
+                };
+                out.extend(self.split_word(&chunk, line, i, j, splitting)?);
+                i = j;
+            } else {
+                return Err(Diag::lex(
+                    format!("쓸 수 없는 글자: {ch:?}"),
+                    Span::new(line, i, i + 1),
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    fn split_word(
+        &self,
+        chunk: &str,
+        line: usize,
+        col: usize,
+        end: usize,
+        splitting: Splitting,
+    ) -> Result<Vec<Token>> {
+        let one = |tok| Ok(vec![Token::new(tok, line, col, end)]);
+
+        if words::is_keyword(chunk) {
+            return one(Tok::Keyword(chunk.into()));
+        }
+        if self.knows(chunk) || words::COMPARATIVES.iter().any(|&(w, _, _)| w == chunk) {
+            return one(Tok::Name(chunk.into()));
+        }
+        for table in [words::builtin_forms(), &self.forms] {
+            if let Some((name, pos, ending)) = table.get(chunk) {
+                return one(Tok::Verb {
+                    name: name.clone(),
+                    pos: *pos,
+                    ending: *ending,
+                });
+            }
+        }
+        for &(form, ending) in words::HADA_FORMS {
+            if let Some(head) = body_before(chunk, form) {
+                return one(Tok::Verb {
+                    name: format!("{head}하다"),
+                    pos: Pos::Verb,
+                    ending,
+                });
+            }
+        }
+        for &(form, ending) in words::DOEDA_FORMS {
+            if let Some(head) = body_before(chunk, form) {
+                return one(Tok::Verb {
+                    name: format!("{head}되다"),
+                    pos: Pos::Passive,
+                    ending,
+                });
+            }
+        }
+        if let Some(&(_, ending)) = words::COPULA.iter().find(|&&(f, _)| f == chunk) {
+            return one(Tok::Copula { ending });
+        }
+        if splitting.take_copula {
+            if let Some((form, ending)) = words::copula_suffix(chunk, &|head| self.knows(head))
+            {
+                let cut = end - form.chars().count();
+                let head = chunk.strip_suffix(form).unwrap();
+                let rest = Splitting {
+                    take_copula: false,
+                    ..splitting
+                };
+                let mut out = self.split_word(head, line, col, cut, rest)?;
+                out.push(Token::new(Tok::Copula { ending }, line, cut, end));
+                return Ok(out);
+            }
+        }
+        if let Some((role, canon)) = words::particle(chunk) {
+            return one(Tok::Particle { role, canon });
+        }
+        if is_number(chunk) {
+            return one(Tok::Number(number(chunk, line, col, end)?));
+        }
+        if splitting.take_particle {
+            for (form, role, canon) in words::particles_by_length() {
+                if let Some(head) = body_before(chunk, &form) {
+                    let cut = end - form.chars().count();
+                    let rest = Splitting {
+                        take_particle: false,
+                        ..splitting
+                    };
+                    let mut out = self.split_word(head, line, col, cut, rest)?;
+                    out.push(Token::new(Tok::Particle { role, canon }, line, cut, end));
+                    return Ok(out);
+                }
+            }
+        }
+        one(Tok::Name(chunk.into()))
+    }
+}
+
+/// `{나이: 17}` -> `나` + `이` 방지
+fn is_dict_key(out: &[Token], brackets: &[char], chars: &[char], stop: usize) -> bool {
+    brackets.last() == Some(&'{')
+        && matches!(
+            out.last().map(|t| &t.tok),
+            Some(Tok::Symbol('{') | Tok::Symbol(','))
+        )
+        && chars.get(stop) == Some(&':')
 }
 
 fn is_word_char(ch: char) -> bool {
@@ -144,38 +314,60 @@ fn word_end(chars: &[char], start: usize) -> usize {
     j
 }
 
-fn scan_number(chars: &[char], start: usize, line: usize) -> (Token, usize) {
-    let j = word_end(chars, start + 1);
-    let raw: String = chars[start..j].iter().collect();
-    (
-        Token::new(Tok::Number(parse_number(&raw)), line, start, j),
-        j,
-    )
+fn digits_end(chars: &[char], start: usize) -> usize {
+    let mut j = start;
+    while j < chars.len() {
+        let dotted =
+            chars[j] == '.' && matches!(chars.get(j + 1), Some(c) if c.is_ascii_digit());
+        if !chars[j].is_ascii_digit() && !dotted {
+            break;
+        }
+        j += 1;
+    }
+    j
 }
 
-fn parse_number(raw: &str) -> Num {
-    match raw.parse::<i64>() {
-        Ok(value) => Num::Int(value),
-        Err(_) => Num::Float(raw.parse().unwrap_or(0.0)),
+fn number(raw: &str, line: usize, col: usize, end: usize) -> Result<Num> {
+    if let Ok(value) = raw.parse::<i64>() {
+        return Ok(Num::Int(value));
     }
+    raw.parse::<f64>().map(Num::Float).map_err(|_| {
+        Diag::lex(
+            format!("수로 읽을 수 없음: {raw}"),
+            Span::new(line, col, end),
+        )
+    })
 }
 
 fn scan_string(chars: &[char], start: usize, line: usize) -> Result<(Token, usize)> {
     let mut text = String::new();
+    let mut parts: Vec<Part> = Vec::new();
     let mut j = start + 1;
     while j < chars.len() && chars[j] != '"' {
         if chars[j] == '\\' && j + 1 < chars.len() {
             text.push(unescape(chars[j + 1]));
             j += 2;
-        } else if chars[j] == '{' {
-            return Err(
-                Diag::lex("보간은 아직 지원하지 않음", Span::new(line, j, j + 1))
-                    .with_hint("중괄호를 글자로 쓰려면 '\\{'"),
-            );
-        } else {
+            continue;
+        }
+        if chars[j] != '{' {
             text.push(chars[j]);
             j += 1;
+            continue;
         }
+        let close = matching_brace(chars, j)
+            .ok_or_else(|| Diag::lex("'{'가 닫히지 않음", Span::new(line, j, j + 1)))?;
+        let raw: String = chars[j + 1..close].iter().collect();
+        let inner = raw.trim();
+        if inner.is_empty() {
+            return Err(Diag::lex("'{}' 안이 비었음", Span::new(line, j, close + 1)));
+        }
+        let offset = j + 1 + raw.chars().take_while(|c| c.is_whitespace()).count();
+        parts.push(Part::Text(std::mem::take(&mut text)));
+        parts.push(Part::Expr {
+            source: inner.to_string(),
+            span: Span::new(line, offset, offset + inner.chars().count()),
+        });
+        j = close + 1;
     }
     if j >= chars.len() {
         return Err(Diag::lex(
@@ -183,90 +375,37 @@ fn scan_string(chars: &[char], start: usize, line: usize) -> Result<(Token, usiz
             Span::new(line, start, start + 1),
         ));
     }
-    Ok((Token::new(Tok::Str(text), line, start, j + 1), j + 1))
+    if parts.is_empty() {
+        return Ok((Token::new(Tok::Str(text), line, start, j + 1), j + 1));
+    }
+    parts.push(Part::Text(text));
+    parts.retain(|part| !matches!(part, Part::Text(text) if text.is_empty()));
+    Ok((Token::new(Tok::Template(parts), line, start, j + 1), j + 1))
+}
+
+fn matching_brace(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 1;
+    for (offset, &ch) in chars.iter().enumerate().skip(open + 1) {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn unescape(ch: char) -> char {
     match ch {
         'n' => '\n',
         't' => '\t',
-        'r' => '\r',
         other => other,
     }
-}
-
-fn split_word(
-    chunk: &str,
-    line: usize,
-    col: usize,
-    end: usize,
-    splitting: Splitting,
-    vocab: &Vocabulary,
-) -> Result<Vec<Token>> {
-    let one = |tok| Ok(vec![Token::new(tok, line, col, end)]);
-
-    if words::is_keyword(chunk) {
-        return one(Tok::Keyword(chunk.into()));
-    }
-    if vocab.knows(chunk) || words::COMPARATIVES.iter().any(|&(w, _, _)| w == chunk) {
-        return one(Tok::Name(chunk.into()));
-    }
-    for &(form, ending) in words::HADA_FORMS {
-        if let Some(head) = body_before(chunk, form) {
-            return one(Tok::Verb {
-                name: format!("{head}하다"),
-                pos: "verb",
-                ending,
-            });
-        }
-    }
-    for &(form, ending) in words::DOEDA_FORMS {
-        if let Some(head) = body_before(chunk, form) {
-            return one(Tok::Verb {
-                name: format!("{head}되다"),
-                pos: "passive",
-                ending,
-            });
-        }
-    }
-    if let Some(&(_, ending)) = words::COPULA.iter().find(|&&(f, _)| f == chunk) {
-        return one(Tok::Copula { ending });
-    }
-    if splitting.take_copula {
-        for &(form, ending) in words::COPULA {
-            if let Some(head) = body_before(chunk, form) {
-                let cut = end - form.chars().count();
-                let rest = Splitting {
-                    take_copula: false,
-                    ..splitting
-                };
-                let mut out = split_word(head, line, col, cut, rest, vocab)?;
-                out.push(Token::new(Tok::Copula { ending }, line, cut, end));
-                return Ok(out);
-            }
-        }
-    }
-    if let Some((role, canon)) = words::particle(chunk) {
-        return one(Tok::Particle { role, canon });
-    }
-    if is_number(chunk) {
-        return one(Tok::Number(parse_number(chunk)));
-    }
-    if splitting.take_particle {
-        for (form, role, canon) in words::particles_by_length() {
-            if let Some(head) = body_before(chunk, &form) {
-                let cut = end - form.chars().count();
-                let rest = Splitting {
-                    take_particle: false,
-                    ..splitting
-                };
-                let mut out = split_word(head, line, col, cut, rest, vocab)?;
-                out.push(Token::new(Tok::Particle { role, canon }, line, cut, end));
-                return Ok(out);
-            }
-        }
-    }
-    one(Tok::Name(chunk.into()))
 }
 
 fn body_before<'a>(chunk: &'a str, suffix: &str) -> Option<&'a str> {

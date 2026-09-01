@@ -1,0 +1,52 @@
+name 이름
+particle 는 topic
+string 새롬
+copula final
+symbol .
+newline
+name 나이
+particle 는 topic
+number 3
+copula final
+symbol .
+newline
+template text:이름: |expr:이름|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:나이: |expr:나이|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 나이
+particle 는 topic
+number 4
+copula final
+symbol .
+newline
+template text:내년: |expr:나이|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+string 가
+particle 를 object
+verb 출력하다 verb conjunctive
+string 나\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template expr:나이|text:에 10을 더하면 |expr:나이에 10을 더한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+string 중괄호: { }\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+eof

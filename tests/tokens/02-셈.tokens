@@ -1,0 +1,41 @@
+template text:3 + 4 = |expr:3에 4를 더한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:10 - 4 = |expr:10에서 4를 뺀 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:3 * 4 = |expr:3에 4를 곱한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:10 / 4 = |expr:10을 4로 나눈 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:10 % 4 = |expr:10을 4로 나눈 나머지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:3^2 = |expr:3에 3을 곱한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:(2+3)*4 = |expr:2에 3을 더한 값에 4를 곱한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:-5의 절댓값 = |expr:0에서 -5를 뺀 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+eof

@@ -1,0 +1,147 @@
+verb 하다 verb auxiliary
+verb 보다 verb final
+symbol :
+newline
+indent 4
+template text:읽음: |expr:"/없는파일.txt"를 읽은 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+name 까닭
+particle 로 instrument
+verb 실패하다 verb conditional
+symbol :
+newline
+indent 4
+template text:실패 이유: |expr:까닭|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+verb 하다 verb auxiliary
+verb 보다 verb final
+symbol :
+newline
+indent 4
+string /없는파일.txt
+particle 를 object
+verb 읽다 verb adnominal_past
+name 값
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+name 내용
+particle 로 instrument
+verb 실패하다 verb conditional
+symbol :
+newline
+indent 4
+keyword 만약
+name 내용
+particle 가 subject
+string 파일없음
+copula conditional
+symbol :
+newline
+indent 8
+string 파일이 없음\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 4
+keyword 아니면
+symbol :
+newline
+indent 8
+template text:다른 문제: |expr:내용|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+dedent 0
+keyword 끝으로
+symbol :
+newline
+indent 4
+string 여기는 늘 지난다\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+name 나이
+particle 로 instrument
+name 확인하다
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+keyword 만약
+name 나이
+particle 가 subject
+number 0
+particle 보다 comparative
+verb 작다 descriptive conditional
+symbol :
+newline
+indent 8
+string 나이는 음수일 수 없음
+copula quotative
+keyword 오류
+particle 를 object
+verb 내다 verb final
+symbol .
+newline
+dedent 4
+name 나이
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+template text:20 확인: |expr:20으로 확인한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+verb 하다 verb auxiliary
+verb 보다 verb final
+symbol :
+newline
+indent 4
+number -5
+particle 로 instrument
+verb 확인하다 verb adnominal_past
+name 값
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+string 여기는 지나지 않는다\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+name 까닭
+particle 로 instrument
+verb 실패하다 verb conditional
+symbol :
+newline
+indent 4
+template text:잡음: |expr:까닭|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+eof

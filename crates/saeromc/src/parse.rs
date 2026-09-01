@@ -1,5 +1,6 @@
 use crate::ast::{Call, Expr, Slot, Stmt};
 use crate::diag::{Diag, Result, Span};
+use crate::hangul::Ending;
 use crate::lex::{Tok, Token};
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Stmt>> {
@@ -63,9 +64,9 @@ impl<'a> Parser<'a> {
                 Tok::Verb { name, ending, .. } => {
                     let (name, ending) = (name.clone(), *ending);
                     let span = self.advance().span;
-                    if ending != "final" {
+                    if ending != Ending::Final {
                         return Err(Diag::syntax(
-                            format!("'{name}'의 어미 '{ending}'는 아직 지원하지 않음"),
+                            format!("'{name}': 아직 종결형만 지원함"),
                             span,
                         ));
                     }

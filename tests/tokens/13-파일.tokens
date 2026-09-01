@@ -1,0 +1,128 @@
+string /tmp/새롬예제.txt
+particle 를 object
+name 기록
+particle 로 instrument
+verb 열다 verb auxiliary
+verb 두다 verb final
+symbol :
+newline
+indent 4
+string 첫 줄\n
+particle 를 object
+name 기록
+particle 에 dative
+verb 쓰다 verb final
+symbol .
+newline
+string 둘째 줄\n
+particle 를 object
+name 기록
+particle 에 dative
+verb 쓰다 verb final
+symbol .
+newline
+dedent 0
+string /tmp/새롬예제2.txt
+particle 를 object
+name 쪽지
+particle 로 instrument
+verb 열다 verb auxiliary
+verb 두다 verb final
+symbol :
+newline
+indent 4
+string 가나다\n
+particle 를 object
+name 쪽지
+particle 에 dative
+verb 쓰다 verb final
+symbol .
+newline
+dedent 0
+template text:읽음:\n|expr:"/tmp/새롬예제.txt"를 읽은 값
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+string /tmp/새롬예제2.txt
+particle 를 object
+name 손질
+particle 로 instrument
+verb 열다 verb auxiliary
+verb 두다 verb final
+symbol :
+newline
+indent 4
+template text:옛 내용: |expr:손질을 읽은 값
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+string 새 내용\n
+particle 를 object
+name 손질
+particle 에 dative
+verb 쓰다 verb final
+symbol .
+newline
+dedent 0
+template text:바뀐 뒤: |expr:"/tmp/새롬예제2.txt"를 읽은 값
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 글줄들
+particle 는 topic
+string /tmp/새롬예제.txt
+particle 를 object
+verb 읽다 verb adnominal_past
+name 값
+particle 를 object
+string \n
+particle 로 instrument
+verb 자르다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+number 1
+particle 부터 from
+name 글줄들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 4
+name 글줄
+particle 는 topic
+name 글줄들
+particle 의 genitive
+name 자리번째
+copula final
+symbol .
+newline
+keyword 만약
+name 글줄
+particle 의 genitive
+name 글자수
+particle 가 subject
+number 0
+copula conditional
+symbol :
+newline
+indent 8
+verb 넘어가다 verb final
+symbol .
+newline
+dedent 4
+template expr:자리|text:: |expr:글줄|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+eof

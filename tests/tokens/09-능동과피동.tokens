@@ -1,0 +1,116 @@
+name 저금통
+particle 는 topic
+symbol {
+name 금액
+symbol :
+number 1000
+symbol }
+copula final
+symbol .
+newline
+name 저금통
+particle 에 dative
+name 돈
+particle 를 object
+name 저축하다
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 저금통
+particle 의 genitive
+name 금액
+particle 는 topic
+name 저금통
+particle 의 genitive
+name 금액
+particle 에 dative
+name 돈
+particle 를 object
+verb 더하다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+dedent 0
+name 저금통
+particle 에 dative
+name 돈
+particle 가 subject
+name 저축되다
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 새것
+particle 는 topic
+name 저금통
+particle 의 genitive
+name 복사본
+copula final
+symbol .
+newline
+name 새것
+particle 에 dative
+name 돈
+particle 를 object
+verb 저축하다 verb final
+symbol .
+newline
+name 새것
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+template text:피동: |expr:500이 저축된 저금통의 금액|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:원본: |expr:저금통의 금액|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 저금통
+particle 에 dative
+number 500
+particle 를 object
+verb 저축하다 verb final
+symbol .
+newline
+template text:능동 뒤: |expr:저금통의 금액|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 수들
+particle 는 topic
+symbol [
+number 3
+symbol ,
+number 1
+symbol ,
+number 2
+symbol ]
+copula final
+symbol .
+newline
+name 수들
+particle 에 dative
+number 4
+particle 를 object
+verb 더하다 verb final
+symbol .
+newline
+template text:더한 뒤: |expr:수들|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+eof

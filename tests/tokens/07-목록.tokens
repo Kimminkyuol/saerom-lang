@@ -1,0 +1,163 @@
+name 통계
+particle 에서 ablative
+name 합
+particle 와 conj
+name 평균
+particle 와 conj
+name 최댓값
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+name 수들
+particle 는 topic
+symbol [
+number 3
+symbol ,
+number 8
+symbol ,
+number 15
+symbol ,
+number 4
+symbol ,
+number 23
+symbol ]
+copula final
+symbol .
+newline
+template text:개수: |expr:수들의 개수|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:첫째: |expr:수들의 첫째|text:  마지막: |expr:수들의 마지막|text:  3번째: |expr:수들의 3번째|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 자리
+particle 는 topic
+number 2
+copula final
+symbol .
+newline
+template expr:자리|text:번째: |expr:수들의 자리번째|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+number 1
+particle 부터 from
+name 수들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 4
+template expr:수들의 자리번째|text: 
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+string \n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 큰수들
+particle 는 topic
+symbol [
+symbol ]
+copula final
+symbol .
+newline
+number 1
+particle 부터 from
+name 수들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 4
+name 수
+particle 는 topic
+name 수들
+particle 의 genitive
+name 자리번째
+copula final
+symbol .
+newline
+keyword 만약
+name 수
+particle 가 subject
+number 10
+particle 보다 comparative
+verb 크다 descriptive conditional
+symbol :
+newline
+indent 8
+name 큰수들
+particle 에 dative
+name 수
+particle 를 object
+verb 더하다 verb final
+symbol .
+newline
+dedent 0
+dedent 0
+template text:10보다 큼: |expr:큰수들|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:합: |expr:수들의 합|text:  평균: |expr:수들의 평균|text:  최댓값: |expr:수들의 최댓값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:복사본: |expr:수들의 복사본|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:담기: |expr:수들이 15를 담는지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:자료형: |expr:수들의 자료형|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 칸들
+particle 는 topic
+string 가,나,다
+particle 를 object
+string ,
+particle 로 instrument
+verb 자르다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+template text:자르기: |expr:칸들|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:잇기: |expr:칸들을 "-"로 이은 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+eof

@@ -45,7 +45,7 @@ fn build_and_run(path: &Path) -> String {
 }
 
 #[test]
-fn 예시가_적어_둔_대로_출력한다() {
+fn examples_print_what_they_annotate() {
     let found = fixtures();
     assert!(!found.is_empty(), "검사할 예시가 없음");
     for path in found {

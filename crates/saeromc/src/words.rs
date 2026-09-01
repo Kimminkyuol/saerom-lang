@@ -1,3 +1,7 @@
+use crate::hangul::{conjugate, Ending, Pos, REGULAR_ENDINGS};
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 pub const PARTICLES: &[(&str, &str, &str)] = &[
     ("은", "topic", "는"),
     ("는", "topic", "는"),
@@ -16,6 +20,8 @@ pub const PARTICLES: &[(&str, &str, &str)] = &[
     ("만큼", "quantity", "만큼"),
     ("부터", "from", "부터"),
     ("까지", "to", "까지"),
+    ("와", "conj", "와"),
+    ("과", "conj", "와"),
 ];
 
 const RANGE_TAILS: &[&str] = &["의", "에", "를", "을"];
@@ -52,37 +58,37 @@ pub const KEYWORDS: &[&str] = &[
     "오류",
 ];
 
-pub const HADA_FORMS: &[(&str, &str)] = &[
-    ("하는지", "interrogative"),
-    ("하거나", "alternative"),
-    ("하는", "adnominal_pres"),
-    ("하면", "conditional"),
-    ("하고", "conjunctive"),
-    ("하지", "negative"),
-    ("한다", "final"),
-    ("한", "adnominal_past"),
-    ("해", "auxiliary"),
+pub const HADA_FORMS: &[(&str, Ending)] = &[
+    ("하는지", Ending::Interrogative),
+    ("하거나", Ending::Alternative),
+    ("하는", Ending::AdnominalPres),
+    ("하면", Ending::Conditional),
+    ("하고", Ending::Conjunctive),
+    ("하지", Ending::Negative),
+    ("한다", Ending::Final),
+    ("한", Ending::AdnominalPast),
+    ("해", Ending::Auxiliary),
 ];
 
-pub const DOEDA_FORMS: &[(&str, &str)] = &[
-    ("되는지", "interrogative"),
-    ("되는", "adnominal_pres"),
-    ("되면", "conditional"),
-    ("되고", "conjunctive"),
-    ("된다", "final"),
-    ("된", "adnominal_past"),
+pub const DOEDA_FORMS: &[(&str, Ending)] = &[
+    ("되는지", Ending::Interrogative),
+    ("되는", Ending::AdnominalPres),
+    ("되면", Ending::Conditional),
+    ("되고", Ending::Conjunctive),
+    ("된다", Ending::Final),
+    ("된", Ending::AdnominalPast),
 ];
 
 /// `다`, `면` 넣지 말 것
-pub const COPULA: &[(&str, &str)] = &[
-    ("이거나", "alternative"),
-    ("이라는", "quotative"),
-    ("라는", "quotative"),
-    ("이면", "conditional"),
-    ("인지", "interrogative"),
-    ("이고", "conjunctive"),
-    ("이다", "final"),
-    ("인", "adnominal_past"),
+pub const COPULA: &[(&str, Ending)] = &[
+    ("이거나", Ending::Alternative),
+    ("이라는", Ending::Quotative),
+    ("라는", Ending::Quotative),
+    ("이면", Ending::Conditional),
+    ("인지", Ending::Interrogative),
+    ("이고", Ending::Conjunctive),
+    ("이다", Ending::Final),
+    ("인", Ending::AdnominalPast),
 ];
 
 /// `초` + `과` 방지
@@ -104,4 +110,174 @@ pub fn particle(form: &str) -> Option<(&'static str, &'static str)> {
         .iter()
         .find(|&&(f, _, _)| f == form)
         .map(|&(_, role, canon)| (role, canon))
+}
+
+pub struct Builtin {
+    pub name: &'static str,
+    stem: &'static str,
+    pos: Pos,
+    overrides: &'static [(Ending, &'static str)],
+}
+
+const fn verb(name: &'static str, stem: &'static str) -> Builtin {
+    Builtin {
+        name,
+        stem,
+        pos: Pos::Verb,
+        overrides: &[],
+    }
+}
+
+pub const BUILTIN_VERBS: &[Builtin] = &[
+    verb("출력하다", "출력하"),
+    verb("바꾸다", "바꾸"),
+    verb("더하다", "더하"),
+    verb("빼다", "빼"),
+    verb("곱하다", "곱하"),
+    verb("나누다", "나누"),
+    verb("반복하다", "반복하"),
+    verb("빠져나가다", "빠져나가"),
+    verb("하다", "하"),
+    verb("보다", "보"),
+    verb("두다", "두"),
+    verb("내다", "내"),
+    verb("읽다", "읽"),
+    verb("입력받다", "입력받"),
+    verb("쓰다", "쓰"),
+    verb("실패하다", "실패하"),
+    verb("가져오다", "가져오"),
+    verb("시작하다", "시작하"),
+    verb("담다", "담"),
+    verb("끝나다", "끝나"),
+    verb("다듬다", "다듬"),
+    Builtin {
+        name: "자르다",
+        stem: "자르",
+        pos: Pos::Verb,
+        overrides: &[(Ending::AdnominalPast, "자른"), (Ending::Auxiliary, "잘라")],
+    },
+    verb("넘어가다", "넘어가"),
+    verb("돌려주다", "돌려주"),
+    Builtin {
+        name: "잇다",
+        stem: "잇",
+        pos: Pos::Verb,
+        overrides: &[
+            (Ending::Auxiliary, "이어"),
+            (Ending::AdnominalPast, "이은"),
+            (Ending::Conditional, "이으면"),
+        ],
+    },
+    Builtin {
+        name: "않다",
+        stem: "않",
+        pos: Pos::Descriptive,
+        overrides: &[
+            (Ending::Final, "않다"),
+            (Ending::AdnominalPast, "않은"),
+            (Ending::AdnominalPres, "않는"),
+            (Ending::Conditional, "않으면"),
+            (Ending::Conjunctive, "않고"),
+            (Ending::Interrogative, "않은지"),
+            (Ending::Alternative, "않거나"),
+        ],
+    },
+    Builtin {
+        name: "아니다",
+        stem: "아니",
+        pos: Pos::Descriptive,
+        overrides: &[
+            (Ending::Final, "아니다"),
+            (Ending::AdnominalPast, "아닌"),
+            (Ending::AdnominalPres, "아닌"),
+            (Ending::Interrogative, "아닌지"),
+            (Ending::Conjunctive, "아니고"),
+            (Ending::Conditional, "아니면"),
+        ],
+    },
+    verb("열다", "열"),
+    Builtin {
+        name: "크다",
+        stem: "크",
+        pos: Pos::Descriptive,
+        overrides: &[],
+    },
+    Builtin {
+        name: "작다",
+        stem: "작",
+        pos: Pos::Descriptive,
+        overrides: &[],
+    },
+    Builtin {
+        name: "같다",
+        stem: "같",
+        pos: Pos::Descriptive,
+        overrides: &[],
+    },
+];
+
+pub type FormTable = HashMap<String, (String, Pos, Ending)>;
+
+pub fn builtin_forms() -> &'static FormTable {
+    static TABLE: OnceLock<FormTable> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = FormTable::new();
+        for found in BUILTIN_VERBS {
+            for &ending in &REGULAR_ENDINGS {
+                let surface = found
+                    .overrides
+                    .iter()
+                    .find(|&&(which, _)| which == ending)
+                    .map(|&(_, form)| form.to_string())
+                    .or_else(|| conjugate(found.stem, found.pos, ending));
+                if let Some(surface) = surface {
+                    table
+                        .entry(surface)
+                        .or_insert((found.name.into(), found.pos, ending));
+                }
+            }
+        }
+        table
+    })
+}
+
+pub fn stem_forms<'a>(stems: impl IntoIterator<Item = &'a String>) -> FormTable {
+    let mut sorted: Vec<&String> = stems.into_iter().collect();
+    sorted.sort();
+    let mut table = FormTable::new();
+    for stem in sorted {
+        let name = format!("{stem}다");
+        for &ending in &REGULAR_ENDINGS {
+            if let Some(surface) = conjugate(stem, Pos::Verb, ending) {
+                table
+                    .entry(surface)
+                    .or_insert((name.clone(), Pos::Verb, ending));
+            }
+        }
+    }
+    table
+}
+
+/// `이라는`, `라는`
+pub fn copula_suffix(
+    chunk: &str,
+    known: &dyn Fn(&str) -> bool,
+) -> Option<(&'static str, Ending)> {
+    let mut fits: Vec<(&'static str, Ending)> = COPULA
+        .iter()
+        .filter(|&&(form, _)| {
+            chunk
+                .strip_suffix(form)
+                .is_some_and(|head| !head.is_empty())
+        })
+        .copied()
+        .collect();
+    fits.sort_by_key(|(form, _)| form.chars().count());
+    for &(form, ending) in &fits {
+        if known(chunk.strip_suffix(form).unwrap()) {
+            return Some((form, ending));
+        }
+    }
+    fits.into_iter()
+        .max_by_key(|(form, _)| form.chars().count())
 }

@@ -1,0 +1,408 @@
+name 수학
+particle 에서 ablative
+name 제곱근
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+name 수들
+particle 의 genitive
+name 합
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+keyword 만약
+name 수들
+particle 의 genitive
+name 개수
+particle 가 subject
+number 0
+copula conditional
+symbol :
+newline
+indent 8
+number 0
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 4
+name 모은것
+particle 는 topic
+number 0
+copula final
+symbol .
+newline
+number 1
+particle 부터 from
+name 수들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 8
+name 모은것
+particle 는 topic
+name 모은것
+particle 에 dative
+name 수들
+particle 의 genitive
+name 자리번째
+particle 를 object
+verb 더하다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+dedent 4
+name 모은것
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+name 수들
+particle 의 genitive
+name 평균
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 개수
+particle 는 topic
+name 수들
+particle 의 genitive
+name 개수
+copula final
+symbol .
+newline
+keyword 만약
+name 개수
+particle 가 subject
+number 0
+copula conditional
+symbol :
+newline
+indent 8
+number 0
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 4
+name 수들
+particle 의 genitive
+name 합
+particle 를 object
+name 개수
+particle 로 instrument
+verb 나누다 verb adnominal_past
+name 값
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+name 수들
+particle 의 genitive
+name 최댓값
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+keyword 만약
+name 수들
+particle 의 genitive
+name 개수
+particle 가 subject
+number 0
+copula conditional
+symbol :
+newline
+indent 8
+string 빈 목록에는 최댓값이 없음
+copula quotative
+keyword 오류
+particle 를 object
+verb 내다 verb final
+symbol .
+newline
+dedent 4
+name 으뜸값
+particle 는 topic
+name 수들
+particle 의 genitive
+name 첫째
+copula final
+symbol .
+newline
+number 1
+particle 부터 from
+name 수들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 8
+keyword 만약
+name 수들
+particle 의 genitive
+name 자리번째
+particle 가 subject
+name 으뜸값
+particle 보다 comparative
+verb 크다 descriptive conditional
+symbol :
+newline
+indent 12
+name 으뜸값
+particle 는 topic
+name 수들
+particle 의 genitive
+name 자리번째
+copula final
+symbol .
+newline
+dedent 4
+dedent 4
+name 으뜸값
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+name 수들
+particle 의 genitive
+name 최솟값
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+keyword 만약
+name 수들
+particle 의 genitive
+name 개수
+particle 가 subject
+number 0
+copula conditional
+symbol :
+newline
+indent 8
+string 빈 목록에는 최솟값이 없음
+copula quotative
+keyword 오류
+particle 를 object
+verb 내다 verb final
+symbol .
+newline
+dedent 4
+name 으뜸값
+particle 는 topic
+name 수들
+particle 의 genitive
+name 첫째
+copula final
+symbol .
+newline
+number 1
+particle 부터 from
+name 수들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 8
+keyword 만약
+name 수들
+particle 의 genitive
+name 자리번째
+particle 가 subject
+name 으뜸값
+particle 보다 comparative
+verb 작다 descriptive conditional
+symbol :
+newline
+indent 12
+name 으뜸값
+particle 는 topic
+name 수들
+particle 의 genitive
+name 자리번째
+copula final
+symbol .
+newline
+dedent 4
+dedent 4
+name 으뜸값
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+name 수들
+particle 의 genitive
+name 범위
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 수들
+particle 의 genitive
+name 최댓값
+particle 에서 ablative
+name 수들
+particle 의 genitive
+name 최솟값
+particle 를 object
+verb 빼다 verb adnominal_past
+name 값
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+name 수들
+particle 의 genitive
+name 분산
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 개수
+particle 는 topic
+name 수들
+particle 의 genitive
+name 개수
+copula final
+symbol .
+newline
+keyword 만약
+name 개수
+particle 가 subject
+number 0
+copula conditional
+symbol :
+newline
+indent 8
+number 0
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 4
+name 평균
+particle 는 topic
+name 수들
+particle 의 genitive
+name 평균
+copula final
+symbol .
+newline
+name 모은것
+particle 는 topic
+number 0
+copula final
+symbol .
+newline
+number 1
+particle 부터 from
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 8
+name 차이
+particle 는 topic
+name 수들
+particle 의 genitive
+name 자리번째
+particle 에서 ablative
+name 평균
+particle 를 object
+verb 빼다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+name 제곱
+particle 는 topic
+name 차이
+particle 에 dative
+name 차이
+particle 를 object
+verb 곱하다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+name 모은것
+particle 는 topic
+name 모은것
+particle 에 dative
+name 제곱
+particle 를 object
+verb 더하다 verb adnominal_past
+name 값
+copula final
+symbol .
+newline
+dedent 4
+name 모은것
+particle 를 object
+name 개수
+particle 로 instrument
+verb 나누다 verb adnominal_past
+name 값
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+name 수들
+particle 의 genitive
+name 표준편차
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 수들
+particle 의 genitive
+name 분산
+particle 의 genitive
+name 제곱근
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+eof

@@ -1,0 +1,180 @@
+name 수학
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+template text:원주율: |expr:수학의 원주율|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:7이 소수: |expr:7이 수학의 소수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:2.5 반올림: |expr:2.5를 수학의 반올림한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:2^10: |expr:2를 10만큼 수학의 거듭제곱한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 수학
+particle 에서 ablative
+name 절댓값
+particle 와 conj
+name 제곱근
+particle 와 conj
+name 계승
+particle 와 conj
+name 약수들
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+template text:|-7|: |expr:-7의 절댓값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:√16: |expr:16의 제곱근|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:5!: |expr:5의 계승|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:12의 약수: |expr:12의 약수들|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 통계
+particle 에서 ablative
+name 합
+particle 와 conj
+name 평균
+particle 와 conj
+name 최댓값
+particle 와 conj
+name 최솟값
+particle 와 conj
+name 범위
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+name 점수들
+particle 는 topic
+symbol [
+number 80
+symbol ,
+number 95
+symbol ,
+number 72
+symbol ,
+number 95
+symbol ,
+number 61
+symbol ]
+copula final
+symbol .
+newline
+template text:합: |expr:점수들의 합|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:평균: |expr:점수들의 평균|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:최댓값: |expr:점수들의 최댓값|text:  최솟값: |expr:점수들의 최솟값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:범위: |expr:점수들의 범위|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 글자
+particle 에서 ablative
+name 뒤집다
+particle 와 conj
+name 치환하다
+particle 와 conj
+name 왼쪽채움하다
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+template text:뒤집기: |expr:"새롬"을 뒤집은 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:치환: |expr:"a-b-c"에서 "-"를 "/"로 치환한 값|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+string 자리맞춤:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+number 1
+particle 부터 from
+name 점수들
+particle 의 genitive
+name 개수
+particle 까지 to
+name 자리
+particle 마다 distributive
+verb 반복하다 verb final
+symbol :
+newline
+indent 4
+name 점수
+particle 는 topic
+name 점수들
+particle 의 genitive
+name 자리번째
+copula final
+symbol .
+newline
+template text:  [|expr:점수를 문자열로 바꾼 값을 5만큼 왼쪽채움한 값|text:]\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+name 수학
+particle 에서 ablative
+name 음수
+copula final
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+template text:-5가 음수: |expr:-5가 음수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:3이 음수: |expr:3이 음수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+eof

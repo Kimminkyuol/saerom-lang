@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "\
-새롬 컴파일러
+새롬
 
-  saeromc <파일.sr> [-o <출력>]   실행파일로 컴파일
-  saeromc --emit-llvm <파일.sr>   LLVM IR만 찍는다
+  saeromc <파일.sr> [-o <출력>]
+  saeromc --emit-llvm <파일.sr>
 ";
 
 fn main() -> ExitCode {
@@ -38,10 +38,12 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let mut source_path: Option<&str> = None;
     let mut output: Option<PathBuf> = None;
     let mut only_llvm = false;
+    let mut only_tokens = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--emit-llvm" => only_llvm = true,
+            "--dump-tokens" => only_tokens = true,
             "-o" => output = Some(PathBuf::from(rest.next().ok_or(Fault::Usage)?)),
             "-h" | "--help" => return Err(Fault::Usage),
             other if other.starts_with('-') => return Err(Fault::Usage),
@@ -52,12 +54,21 @@ fn run(args: &[String]) -> Result<(), Fault> {
 
     let source = std::fs::read_to_string(path)
         .map_err(|error| format!("파일을 읽을 수 없음: {path} ({error})\n"))?;
+    let base_dir = Path::new(path).parent();
+    if only_tokens {
+        let found =
+            saeromc::tokens(&source, base_dir).map_err(|diag| diag.render(&source, path))?;
+        print!("{}", saeromc::dump::tokens(&found));
+        return Ok(());
+    }
+
     let triple = if only_llvm {
         String::new()
     } else {
         target_triple()
     };
-    let ir = saeromc::compile(&source, &triple).map_err(|diag| diag.render(&source, path))?;
+    let ir = saeromc::compile(&source, base_dir, &triple)
+        .map_err(|diag| diag.render(&source, path))?;
 
     if only_llvm {
         print!("{ir}");

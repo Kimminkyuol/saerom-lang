@@ -1,0 +1,122 @@
+name 수학
+particle 에서 ablative
+name 짝수
+copula final
+particle 를 object
+verb 가져오다 verb final
+symbol .
+newline
+name 수
+particle 가 subject
+name 홀수이다
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+name 수
+particle 를 object
+number 2
+particle 로 instrument
+verb 나누다 verb adnominal_past
+name 나머지
+particle 가 subject
+number 1
+copula interrogative
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+number 7
+particle 가 subject
+name 홀수
+copula conditional
+symbol :
+newline
+indent 4
+string 7은 홀수\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+template text:3이 홀수인가: |expr:3이 홀수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:4가 홀수인가: |expr:4가 홀수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+keyword 만약
+number 4
+particle 가 subject
+name 홀수
+particle 가 subject
+keyword 아니면
+symbol :
+newline
+indent 4
+string 4는 홀수가 아님\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+template text:2가 3 이하인가: |expr:2가 3 이하인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+name 수
+particle 가 subject
+name 기준
+particle 보다 comparative
+name 큰짝수이다
+copula quotative
+name 것
+particle 는 topic
+symbol :
+newline
+indent 4
+keyword 만약
+name 수
+particle 가 subject
+name 짝수
+particle 가 subject
+keyword 아니면
+symbol :
+newline
+indent 8
+keyword 거짓
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 4
+name 수
+particle 가 subject
+name 기준
+particle 보다 comparative
+verb 크다 descriptive interrogative
+particle 를 object
+verb 돌려주다 verb final
+symbol .
+newline
+dedent 0
+template text:10이 5보다 큰 짝수: |expr:10이 5보다 큰짝수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+template text:7이 5보다 큰 짝수: |expr:7이 5보다 큰짝수인지|text:\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+eof

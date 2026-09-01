@@ -1,0 +1,182 @@
+name 나이
+particle 는 topic
+number 20
+copula final
+symbol .
+newline
+keyword 만약
+name 나이
+particle 가 subject
+number 20
+particle 보다 comparative
+verb 크다 descriptive conditional
+symbol :
+newline
+indent 4
+string 어른\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 아니고
+keyword 만약
+name 나이
+particle 가 subject
+number 20
+copula conditional
+symbol :
+newline
+indent 4
+string 갓 어른\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 아니면
+symbol :
+newline
+indent 4
+string 아이\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 10
+particle 보다 comparative
+verb 크다 descriptive conjunctive
+name 나이
+particle 가 subject
+number 30
+particle 보다 comparative
+verb 작다 descriptive conditional
+symbol :
+newline
+indent 4
+string 20대쯤\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 100
+copula alternative
+name 나이
+particle 가 subject
+number 20
+copula conditional
+symbol :
+newline
+indent 4
+string 스물이거나 백\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 30
+particle 보다 comparative
+verb 크다 descriptive negative
+verb 않다 descriptive conditional
+symbol :
+newline
+indent 4
+string 서른 이하\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 19
+particle 가 subject
+keyword 아니면
+symbol :
+newline
+indent 4
+string 열아홉이 아님\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 20
+particle 보다 comparative
+verb 작다 descriptive alternative
+number 20
+particle 와 conj
+verb 같다 descriptive conditional
+symbol :
+newline
+indent 4
+string 스물 이하\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 20
+name 이상
+copula conditional
+symbol :
+newline
+indent 4
+string 스무 살부터\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 19
+name 초과
+copula conjunctive
+number 30
+name 미만
+copula conditional
+symbol :
+newline
+indent 4
+string 스물에서 스물아홉\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+keyword 만약
+name 나이
+particle 가 subject
+number 20
+name 이하
+copula conditional
+symbol :
+newline
+indent 4
+string 스무 살까지\n
+particle 를 object
+verb 출력하다 verb final
+symbol .
+newline
+dedent 0
+eof
