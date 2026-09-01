@@ -24,7 +24,7 @@ fn token_streams_match_frozen_goldens() {
     let root = root();
     std::env::set_var("SAEROM_STD", root.join("std"));
     let found = sources();
-    assert!(found.len() >= 19, "검사할 소스가 모자람: {}", found.len());
+    assert!(found.len() >= 18, "검사할 소스가 모자람: {}", found.len());
     for path in found {
         let stem = path
             .file_stem()

@@ -212,32 +212,6 @@ particle 를 object
 verb 출력하다 verb final
 symbol .
 newline
-string 이름? 
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-verb 하다 verb auxiliary
-verb 보다 verb final
-symbol :
-newline
-indent 4
-template text:안녕, |expr:입력받은 값|text:\n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
-verb 실패하다 verb conditional
-symbol :
-newline
-indent 4
-string \n(입력 없음)\n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
 string /tmp/새롬내장.txt
 particle 를 object
 name 적을것

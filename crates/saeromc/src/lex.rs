@@ -60,11 +60,22 @@ impl Token {
 pub struct Vocabulary {
     pub names: HashSet<String>,
     pub stems: HashSet<String>,
+    forms: FormTable,
 }
 
-struct Lexer {
-    names: HashSet<String>,
-    forms: FormTable,
+impl Vocabulary {
+    pub fn new(names: HashSet<String>, stems: HashSet<String>) -> Self {
+        let forms = words::stem_forms(&stems);
+        Vocabulary {
+            names,
+            stems,
+            forms,
+        }
+    }
+}
+
+struct Lexer<'a> {
+    vocab: &'a Vocabulary,
 }
 
 #[derive(Clone, Copy)]
@@ -79,10 +90,7 @@ pub fn ready(source: &str) -> String {
 
 pub fn tokenize(source: &str, vocab: &Vocabulary) -> Result<Vec<Token>> {
     let source = ready(source);
-    let lexer = Lexer {
-        names: vocab.names.clone(),
-        forms: words::stem_forms(&vocab.stems),
-    };
+    let lexer = Lexer { vocab };
 
     let lines: Vec<&str> = source.split('\n').collect();
     let mut tokens = Vec::new();
@@ -142,9 +150,9 @@ fn ends_statement(produced: &[Token]) -> bool {
         )
 }
 
-impl Lexer {
+impl Lexer<'_> {
     fn knows(&self, word: &str) -> bool {
-        self.names.contains(word)
+        self.vocab.names.contains(word)
     }
 
     fn scan_line(&self, chars: &[char], line: usize) -> Result<Vec<Token>> {
@@ -217,7 +225,7 @@ impl Lexer {
         if self.knows(chunk) || words::COMPARATIVES.iter().any(|&(w, _, _)| w == chunk) {
             return one(Tok::Name(chunk.into()));
         }
-        for table in [words::builtin_forms(), &self.forms] {
+        for table in [words::builtin_forms(), &self.vocab.forms] {
             if let Some((name, pos, ending)) = table.get(chunk) {
                 return one(Tok::Verb {
                     name: name.clone(),
@@ -269,7 +277,7 @@ impl Lexer {
         }
         if splitting.take_particle {
             for (form, role, canon) in words::particles_by_length() {
-                if let Some(head) = body_before(chunk, &form) {
+                if let Some(head) = body_before(chunk, form.as_ref()) {
                     let cut = end - form.chars().count();
                     let rest = Splitting {
                         take_particle: false,

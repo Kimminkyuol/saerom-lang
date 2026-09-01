@@ -1,6 +1,7 @@
 use crate::diag::Result;
 use crate::hangul::{is_syllable, Ending};
 use crate::lex::{tokenize, Tok, Token, Vocabulary};
+use crate::sig::{ordered, Marker, Signatures};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -16,10 +17,7 @@ fn scan(
     let tokens = tokenize(source, &Vocabulary::default())?;
     let mut stems = declared_stems(&tokens);
     stems.extend(imported_stems(&tokens, base_dir, chain));
-    Ok(Vocabulary {
-        names: declared_names(&tokens),
-        stems,
-    })
+    Ok(Vocabulary::new(declared_names(&tokens), stems))
 }
 
 fn declared_names(tokens: &[Token]) -> HashSet<String> {
@@ -81,36 +79,14 @@ fn dictionary_form(name: &str) -> bool {
         && !name.ends_with("이다")
 }
 
-fn imported_modules(tokens: &[Token]) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut line: Vec<&Tok> = Vec::new();
-    for token in tokens {
-        match &token.tok {
-            Tok::Indent(_) | Tok::Dedent(_) => {}
-            Tok::Newline => {
-                if let [Tok::Name(name), .., Tok::Verb { name: verb, .. }, Tok::Symbol('.')] =
-                    line.as_slice()
-                {
-                    if verb == "가져오다" {
-                        found.push(name.clone());
-                    }
-                }
-                line.clear();
-            }
-            other => line.push(other),
-        }
-    }
-    found
-}
-
 fn imported_stems(
     tokens: &[Token],
     base_dir: Option<&Path>,
     chain: &mut HashSet<PathBuf>,
 ) -> HashSet<String> {
     let mut stems = HashSet::new();
-    for name in imported_modules(tokens) {
-        let Some(path) = resolve_module(&name, base_dir) else {
+    for found in imports(tokens) {
+        let Some(path) = resolve_module(&found.module, base_dir) else {
             continue;
         };
         if !chain.insert(path.clone()) {
@@ -128,11 +104,12 @@ fn imported_stems(
 
 pub fn resolve_module(name: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
     let wanted = crate::hangul::to_nfc(&format!("{name}.sr"));
-    base_dir
+    let found = base_dir
         .into_iter()
         .map(Path::to_path_buf)
         .chain(standard_library())
-        .find_map(|folder| find_in(&folder, &wanted))
+        .find_map(|folder| find_in(&folder, &wanted))?;
+    Some(found.canonicalize().unwrap_or(found))
 }
 
 fn find_in(folder: &Path, wanted: &str) -> Option<PathBuf> {
@@ -153,4 +130,155 @@ fn standard_library() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let found = exe.parent()?.parent()?.parent()?.join("std");
     found.is_dir().then_some(found)
+}
+
+#[derive(Default, Clone)]
+pub struct Program {
+    pub vocab: Vocabulary,
+    pub signatures: Signatures,
+    pub modules: HashSet<String>,
+    pub nouns: HashSet<String>,
+}
+
+pub fn survey(source: &str, base_dir: Option<&Path>) -> Result<Program> {
+    let mut chain = HashSet::new();
+    let mut program = Program {
+        signatures: Signatures::builtin(),
+        ..Program::default()
+    };
+    gather(source, base_dir, &mut chain, &mut program, None, true)?;
+    Ok(program)
+}
+
+fn gather(
+    source: &str,
+    base_dir: Option<&Path>,
+    chain: &mut HashSet<PathBuf>,
+    into: &mut Program,
+    taking: Option<&[String]>,
+    root: bool,
+) -> Result<()> {
+    let vocab = scan(source, base_dir, chain)?;
+    let tokens = tokenize(source, &vocab)?;
+    let mine = definitions(&tokens);
+    let wanted = |name: &str| taking.is_none_or(|names| names.iter().any(|n| n == name));
+
+    for (head, params) in &mine {
+        if !wanted(head) {
+            continue;
+        }
+        if head.ends_with('다') {
+            into.signatures
+                .add(head, ordered(params.iter().map(|&(marker, _)| marker)));
+        } else {
+            into.nouns.insert(head.clone());
+        }
+    }
+    if root {
+        into.vocab = vocab;
+    }
+
+    for import in imports(&tokens) {
+        let Some(path) = resolve_module(&import.module, base_dir) else {
+            continue;
+        };
+        if !chain.insert(path.clone()) {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            gather(
+                &text,
+                path.parent(),
+                chain,
+                into,
+                import.names.as_deref(),
+                false,
+            )?;
+        }
+        chain.remove(&path);
+        if import.names.is_none() {
+            into.modules.insert(import.module);
+        }
+    }
+    Ok(())
+}
+
+fn definitions(tokens: &[Token]) -> Vec<(String, Vec<(Marker, String)>)> {
+    let mut found = Vec::new();
+    for line in lines(tokens) {
+        let Some((head, params)) = definition_head(&line) else {
+            continue;
+        };
+        found.push((head, params));
+    }
+    found
+}
+
+fn definition_head(line: &[&Tok]) -> Option<(String, Vec<(Marker, String)>)> {
+    let (front, tail) = line.split_at(line.len().checked_sub(5)?);
+    let [Tok::Name(head), Tok::Copula {
+        ending: Ending::Quotative,
+    }, Tok::Name(thing), Tok::Particle { role: "topic", .. }, Tok::Symbol(':')] = tail
+    else {
+        return None;
+    };
+    if thing != "것" {
+        return None;
+    }
+    let mut params = Vec::new();
+    for pair in front.chunks(2) {
+        let [Tok::Name(name), Tok::Particle { canon, .. }] = pair else {
+            return None;
+        };
+        params.push((Marker::Case(canon), name.clone()));
+    }
+    Some((head.clone(), params))
+}
+
+struct Import {
+    module: String,
+    names: Option<Vec<String>>,
+}
+
+fn imports(tokens: &[Token]) -> Vec<Import> {
+    let mut found = Vec::new();
+    for line in lines(tokens) {
+        let [Tok::Name(module), Tok::Particle { canon, .. }, rest @ ..] = line.as_slice()
+        else {
+            continue;
+        };
+        if !matches!(rest.last(), Some(Tok::Symbol('.'))) {
+            continue;
+        }
+        if !matches!(rest.iter().rev().nth(1), Some(Tok::Verb { name, .. }) if name == "가져오다")
+        {
+            continue;
+        }
+        let names = (*canon == "에서").then(|| {
+            rest.iter()
+                .filter_map(|tok| match tok {
+                    Tok::Name(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        found.push(Import {
+            module: module.clone(),
+            names,
+        });
+    }
+    found
+}
+
+fn lines(tokens: &[Token]) -> Vec<Vec<&Tok>> {
+    let mut all = Vec::new();
+    let mut line = Vec::new();
+    for token in tokens {
+        match &token.tok {
+            Tok::Indent(_) | Tok::Dedent(_) => {}
+            Tok::Newline => all.push(std::mem::take(&mut line)),
+            other => line.push(other),
+        }
+    }
+    all
 }

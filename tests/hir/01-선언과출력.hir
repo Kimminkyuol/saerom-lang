@@ -1,0 +1,78 @@
+globals 6
+module 0 01-선언과출력
+  (set global 0
+    str 정수
+  )
+  (set global 1
+    str 실수
+  )
+  (set global 2
+    str 문자열
+  )
+  (set global 3
+    str 논리값
+  )
+  (set global 4
+    str 새롬
+  )
+  (set global 5
+    int 3
+  )
+  (eval
+    (call Print
+      (template
+        str 이름: 
+        global 4
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str 나이: 
+        global 5
+        str \n
+      )
+    )
+  )
+  (set global 5
+    int 4
+  )
+  (eval
+    (call Print
+      (template
+        str 내년: 
+        global 5
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      str 가
+    )
+  )
+  (eval
+    (call Print
+      str 나\n
+    )
+  )
+  (eval
+    (call Print
+      (template
+        global 5
+        str 에 10을 더하면 
+        (call AddCopy
+          global 5
+          int 10
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      str 중괄호: { }\n
+    )
+  )

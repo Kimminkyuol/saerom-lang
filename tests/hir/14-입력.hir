@@ -1,0 +1,75 @@
+globals 7
+module 0 14-입력
+  (set global 0
+    str 정수
+  )
+  (set global 1
+    str 실수
+  )
+  (set global 2
+    str 문자열
+  )
+  (set global 3
+    str 논리값
+  )
+  (eval
+    (call Print
+      str 이름? 
+    )
+  )
+  (set global 4
+    (call ReadLine
+    )
+  )
+  (eval
+    (call Print
+      str 나이? 
+    )
+  )
+  (set global 5
+    (call Convert
+      (call ReadLine
+      )
+      global 0
+    )
+  )
+  (eval
+    (call Print
+      (template
+        global 4
+        str 님, 내년에 
+        (call AddCopy
+          global 5
+          int 1
+        )
+        str 살\n
+      )
+    )
+  )
+  (eval
+    (call Print
+      str 남은 줄:\n
+    )
+  )
+  (range global 6
+    (start
+      int 1
+    )
+    (stop
+      int 2
+    )
+    (body
+      (eval
+        (call Print
+          (template
+            str   
+            global 6
+            str : 
+            (call ReadLine
+            )
+            str \n
+          )
+        )
+      )
+    )
+  )

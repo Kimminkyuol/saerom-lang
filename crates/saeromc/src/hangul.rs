@@ -225,3 +225,10 @@ impl Pos {
         }
     }
 }
+
+pub fn subject_particle(word: &str) -> &'static str {
+    match word.chars().last() {
+        Some(ch) if coda_of(ch).is_some() => "이",
+        _ => "가",
+    }
+}

@@ -1,0 +1,113 @@
+globals 4
+module 0 02-셈
+  (set global 0
+    str 정수
+  )
+  (set global 1
+    str 실수
+  )
+  (set global 2
+    str 문자열
+  )
+  (set global 3
+    str 논리값
+  )
+  (eval
+    (call Print
+      (template
+        str 3 + 4 = 
+        (call AddCopy
+          int 3
+          int 4
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str 10 - 4 = 
+        (call Sub
+          int 10
+          int 4
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str 3 * 4 = 
+        (call Mul
+          int 3
+          int 4
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str 10 / 4 = 
+        (call Div
+          int 10
+          int 4
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str 10 % 4 = 
+        (call Rem
+          int 10
+          int 4
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str 3^2 = 
+        (call Mul
+          int 3
+          int 3
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str (2+3)*4 = 
+        (call Mul
+          (call AddCopy
+            int 2
+            int 3
+          )
+          int 4
+        )
+        str \n
+      )
+    )
+  )
+  (eval
+    (call Print
+      (template
+        str -5의 절댓값 = 
+        (call Sub
+          int 0
+          int -5
+        )
+        str \n
+      )
+    )
+  )

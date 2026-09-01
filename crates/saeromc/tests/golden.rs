@@ -1,12 +1,24 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// 넣는 값에 따라 출력이 달라지므로 건너뛴다.
+const NEEDS_INPUT: &[&str] = &["14-입력"];
+
 fn fixtures() -> Vec<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
-    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("tests/ 를 읽을 수 없음")
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut found: Vec<PathBuf> = ["tests", "examples"]
+        .iter()
+        .flat_map(|folder| std::fs::read_dir(root.join(folder)).expect("자리 없음"))
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "sr"))
+        .filter(|path| {
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            !NEEDS_INPUT.contains(&stem.as_str())
+        })
         .collect();
     found.sort();
     found
@@ -47,7 +59,7 @@ fn build_and_run(path: &Path) -> String {
 #[test]
 fn examples_print_what_they_annotate() {
     let found = fixtures();
-    assert!(!found.is_empty(), "검사할 예시가 없음");
+    assert!(found.len() >= 15, "검사할 예시가 모자람: {}", found.len());
     for path in found {
         let source = std::fs::read_to_string(&path).expect("소스를 읽을 수 없음");
         let wanted = annotations(&source);

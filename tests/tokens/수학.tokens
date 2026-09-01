@@ -376,10 +376,8 @@ symbol :
 newline
 indent 8
 string 제곱근은 음수에 쓸 수 없음
-copula quotative
-keyword 오류
-particle 를 object
-verb 내다 verb final
+particle 로 instrument
+verb 종료하다 verb final
 symbol .
 newline
 dedent 4

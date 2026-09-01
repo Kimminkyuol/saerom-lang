@@ -19,6 +19,7 @@ pub struct Diag {
     pub msg: String,
     pub hint: Option<String>,
     pub span: Span,
+    pub unit: Option<usize>,
 }
 
 impl Diag {
@@ -28,6 +29,7 @@ impl Diag {
             msg: msg.into(),
             hint: None,
             span,
+            unit: None,
         }
     }
 
@@ -99,3 +101,32 @@ impl fmt::Display for Diag {
 }
 
 pub type Result<T> = std::result::Result<T, Diag>;
+
+pub fn suggest<'a>(word: &str, known: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let limit = (word.chars().count() / 2).max(1);
+    known
+        .into_iter()
+        .map(|found| (distance(word, found), found))
+        .filter(|&(cost, _)| cost <= limit)
+        .min_by_key(|&(cost, found)| (cost, found.len()))
+        .map(|(_, found)| found)
+}
+
+fn distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut row: Vec<usize> = (0..=right.len()).collect();
+    for (i, a) in left.chars().enumerate() {
+        let mut corner = row[0];
+        row[0] = i + 1;
+        for (j, &b) in right.iter().enumerate() {
+            let next = if a == b {
+                corner
+            } else {
+                corner.min(row[j]).min(row[j + 1]) + 1
+            };
+            corner = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[right.len()]
+}

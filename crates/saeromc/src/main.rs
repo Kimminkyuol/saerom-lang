@@ -39,11 +39,17 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let mut output: Option<PathBuf> = None;
     let mut only_llvm = false;
     let mut only_tokens = false;
+    let mut only_ast = false;
+    let mut only_check = false;
+    let mut only_hir = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--emit-llvm" => only_llvm = true,
             "--dump-tokens" => only_tokens = true,
+            "--dump-ast" => only_ast = true,
+            "--check" => only_check = true,
+            "--dump-hir" => only_hir = true,
             "-o" => output = Some(PathBuf::from(rest.next().ok_or(Fault::Usage)?)),
             "-h" | "--help" => return Err(Fault::Usage),
             other if other.starts_with('-') => return Err(Fault::Usage),
@@ -56,9 +62,25 @@ fn run(args: &[String]) -> Result<(), Fault> {
         .map_err(|error| format!("파일을 읽을 수 없음: {path} ({error})\n"))?;
     let base_dir = Path::new(path).parent();
     if only_tokens {
-        let found =
-            saeromc::tokens(&source, base_dir).map_err(|diag| diag.render(&source, path))?;
+        let found = saeromc::tokens(&source, base_dir)
+            .map_err(|diag| render(&[diag], &source, path))?;
         print!("{}", saeromc::dump::tokens(&found));
+        return Ok(());
+    }
+
+    if only_ast {
+        let statements =
+            saeromc::front(&source, base_dir).map_err(|found| render(&found, &source, path))?;
+        print!("{}", saeromc::dump::ast(&statements));
+        return Ok(());
+    }
+
+    if only_check || only_hir {
+        let (_, program) = saeromc::analyze(&source, Some(Path::new(path)))
+            .map_err(|found| found.render(&source, path))?;
+        if only_hir {
+            print!("{}", saeromc::dump::hir(&program));
+        }
         return Ok(());
     }
 
@@ -68,7 +90,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
         target_triple()
     };
     let ir = saeromc::compile(&source, base_dir, &triple)
-        .map_err(|diag| diag.render(&source, path))?;
+        .map_err(|found| found.render(&source, path))?;
 
     if only_llvm {
         print!("{ir}");
@@ -77,6 +99,14 @@ fn run(args: &[String]) -> Result<(), Fault> {
 
     let output = output.unwrap_or_else(|| Path::new(path).with_extension(""));
     link(&ir, &output).map_err(Fault::Message)
+}
+
+fn render(found: &[saeromc::diag::Diag], source: &str, path: &str) -> String {
+    found
+        .iter()
+        .map(|diag| diag.render(source, path))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn target_triple() -> String {

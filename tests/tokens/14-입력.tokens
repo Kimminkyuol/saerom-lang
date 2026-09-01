@@ -3,11 +3,6 @@ particle 를 object
 verb 출력하다 verb final
 symbol .
 newline
-verb 하다 verb auxiliary
-verb 보다 verb final
-symbol :
-newline
-indent 4
 name 이름
 particle 는 topic
 verb 입력받다 verb adnominal_past
@@ -15,33 +10,11 @@ name 값
 copula final
 symbol .
 newline
-dedent 0
-verb 실패하다 verb conditional
-symbol :
-newline
-indent 4
-name 이름
-particle 는 topic
-string 이름없음
-copula final
-symbol .
-newline
-string \n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
 string 나이? 
 particle 를 object
 verb 출력하다 verb final
 symbol .
 newline
-verb 하다 verb auxiliary
-verb 보다 verb final
-symbol :
-newline
-indent 4
 name 나이
 particle 는 topic
 verb 입력받다 verb adnominal_past
@@ -54,23 +27,6 @@ name 값
 copula final
 symbol .
 newline
-dedent 0
-verb 실패하다 verb conditional
-symbol :
-newline
-indent 4
-name 나이
-particle 는 topic
-number 0
-copula final
-symbol .
-newline
-string \n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
 template expr:이름|text:님, 내년에 |expr:나이에 1을 더한 값|text:살\n
 particle 를 object
 verb 출력하다 verb final
@@ -81,53 +37,17 @@ particle 를 object
 verb 출력하다 verb final
 symbol .
 newline
-verb 하다 verb auxiliary
-verb 보다 verb final
-symbol :
-newline
-indent 4
+number 1
+particle 부터 from
+number 2
+particle 까지 to
 name 자리
-particle 는 topic
-number 0
-copula final
-symbol .
-newline
-name 언제나
-particle 는 topic
-keyword 참
-copula final
-symbol .
-newline
-name 언제나
-copula adnominal_past
-keyword 동안
+particle 마다 distributive
 verb 반복하다 verb final
 symbol :
 newline
-indent 8
-name 자리
-particle 는 topic
-name 자리
-particle 에 dative
-number 1
-particle 를 object
-verb 더하다 verb adnominal_past
-name 값
-copula final
-symbol .
-newline
-template text:  |expr:자리|text:: |expr:입력받은 값|text:\n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
-dedent 0
-verb 실패하다 verb conditional
-symbol :
-newline
 indent 4
-string (끝)\n
+template text:  |expr:자리|text:: |expr:입력받은 값|text:\n
 particle 를 object
 verb 출력하다 verb final
 symbol .

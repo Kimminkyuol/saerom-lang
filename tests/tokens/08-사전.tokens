@@ -170,27 +170,4 @@ verb 출력하다 verb final
 symbol .
 newline
 dedent 0
-verb 하다 verb auxiliary
-verb 보다 verb final
-symbol :
-newline
-indent 4
-template expr:철수의 키|text:\n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
-name 까닭
-particle 로 instrument
-verb 실패하다 verb conditional
-symbol :
-newline
-indent 4
-template text:잡음: |expr:까닭|text:\n
-particle 를 object
-verb 출력하다 verb final
-symbol .
-newline
-dedent 0
 eof
