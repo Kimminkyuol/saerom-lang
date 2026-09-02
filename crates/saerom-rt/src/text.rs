@@ -20,7 +20,7 @@ pub fn to_text(value: &Value) -> String {
                 .collect();
             format!("{{{}}}", shown.join(", "))
         }
-        _ => format!("파일 {}", value.as_handle().path),
+        _ => "없음".to_string(),
     }
 }
 

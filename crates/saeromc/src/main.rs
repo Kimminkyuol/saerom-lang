@@ -42,7 +42,9 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let mut only_ast = false;
     let mut only_check = false;
     let mut only_hir = false;
+    let mut only_types = false;
     let mut tuning: Option<String> = None;
+    let mut frames = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -51,8 +53,10 @@ fn run(args: &[String]) -> Result<(), Fault> {
             "--dump-ast" => only_ast = true,
             "--check" => only_check = true,
             "--dump-hir" => only_hir = true,
+            "--dump-types" => only_types = true,
             "-o" => output = Some(PathBuf::from(rest.next().ok_or(Fault::Usage)?)),
             "-O" | "-O0" | "-O1" | "-O2" | "-O3" | "-Os" => tuning = Some(arg.clone()),
+            "-g" => frames = true,
             "-h" | "--help" => return Err(Fault::Usage),
             other if other.starts_with('-') => return Err(Fault::Usage),
             other => source_path = Some(other),
@@ -77,11 +81,14 @@ fn run(args: &[String]) -> Result<(), Fault> {
         return Ok(());
     }
 
-    if only_check || only_hir {
+    if only_check || only_hir || only_types {
         let (_, program) = saeromc::analyze(&source, Some(Path::new(path)))
             .map_err(|found| found.render(&source, path))?;
         if only_hir {
             print!("{}", saeromc::dump::hir(&program));
+        }
+        if only_types {
+            print!("{}", saeromc::dump::types(&program));
         }
         return Ok(());
     }
@@ -91,7 +98,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     } else {
         target_triple()
     };
-    let ir = saeromc::compile(&source, Some(Path::new(path)), &triple)
+    let ir = saeromc::compile(&source, Some(Path::new(path)), &triple, frames)
         .map_err(|found| found.render(&source, path))?;
 
     if only_llvm {
@@ -148,13 +155,27 @@ fn link(ir: &str, output: &Path, tuning: Option<&str>) -> Result<(), String> {
 }
 
 fn runtime_archive() -> Result<PathBuf, String> {
-    let here = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .ok_or("컴파일러 자리를 알 수 없음\n")?;
-    let found = here.join("libsaerom_rt.a");
-    if found.exists() {
-        return Ok(found);
+    const NAME: &str = "libsaerom_rt.a";
+    let mut looked = Vec::new();
+    if let Some(given) = std::env::var_os("SAEROM_RT") {
+        looked.push(PathBuf::from(given));
     }
-    Err(format!("런타임을 찾을 수 없음: {}\n", found.display()))
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(here) = exe.parent() {
+            looked.push(here.join(NAME));
+            looked.push(here.join("../lib/saerom").join(NAME));
+        }
+    }
+    if let Some(found) = looked.iter().find(|path| path.exists()) {
+        return Ok(found.clone());
+    }
+    let shown: Vec<String> = looked
+        .iter()
+        .map(|path| format!("  {}", path.display()))
+        .collect();
+    Err(format!(
+        "런타임 {NAME} 을 찾을 수 없음. 찾아본 자리:\n{}\n\
+         컴파일러 옆에 두거나 SAEROM_RT 로 자리를 알려 주세요.\n",
+        shown.join("\n")
+    ))
 }

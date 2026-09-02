@@ -1,4 +1,4 @@
-use crate::ast::{self, DefKind, LoopKind, Stmt as ASt};
+use crate::ast::{self, LoopKind, Stmt as ASt};
 use crate::builtins;
 use crate::diag::{suggest, Diag, Span};
 use crate::hir::*;
@@ -259,19 +259,12 @@ impl<'a> Resolver<'a> {
         for statement in statements {
             match statement {
                 ASt::Define {
-                    name,
-                    kind,
-                    params,
-                    span,
-                    ..
+                    name, params, span, ..
                 } => {
                     let func = self.functions.len() as FuncId;
                     self.functions.push(Function {
                         name: Rc::from(name.as_str()),
-                        kind: match kind {
-                            DefKind::Verb => Kind::Verb,
-                            DefKind::Predicate => Kind::Predicate,
-                        },
+                        kind: Kind::Verb,
                         module: self.module_of[unit],
                         params: Vec::new(),
                         locals: 0,
@@ -326,7 +319,7 @@ fn blocks_of(statement: &ASt) -> Vec<&[ASt]> {
             }
             found
         }
-        ASt::Loop { body, .. } | ASt::With { body, .. } => vec![body],
+        ASt::Loop { body, .. } => vec![body],
         _ => Vec::new(),
     }
 }
@@ -341,7 +334,6 @@ fn bind_names(statements: &[ASt], into: &mut Vec<String>) {
                 kind: LoopKind::Range { variable, .. },
                 ..
             } => into.push(variable.clone()),
-            ASt::With { name, .. } => into.push(name.clone()),
             ASt::Define { .. } | ASt::Noun { .. } => continue,
             _ => {}
         }
@@ -542,22 +534,6 @@ impl<'a> Resolver<'a> {
                 let value = self.lower_expr(frame, value);
                 out.push(Stmt::Return { value, span: *span });
             }
-            ASt::With {
-                call,
-                name,
-                body,
-                span,
-            } => {
-                let call = self.lower_call(frame, call);
-                let place = frame.place(name, &mut self.tables[frame.unit], &mut self.globals);
-                let body = self.lower_block(frame, body);
-                out.push(Stmt::With {
-                    call,
-                    place,
-                    body,
-                    span: *span,
-                });
-            }
             ASt::Define { .. } | ASt::Noun { .. } | ASt::Import { .. } => {}
         }
     }
@@ -587,6 +563,7 @@ impl<'a> Resolver<'a> {
     fn lower_expr(&mut self, frame: &mut Frame, expr: &'a ast::Expr) -> Expr {
         match expr {
             ast::Expr::Literal { value, .. } => match value {
+                ast::Literal::Nothing => Expr::Nothing,
                 ast::Literal::Int(found) => Expr::Int(*found),
                 ast::Literal::Float(found) => Expr::Float(*found),
                 ast::Literal::Str(found) => Expr::Str(Rc::from(found.as_str())),

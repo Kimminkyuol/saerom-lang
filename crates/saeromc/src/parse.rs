@@ -226,7 +226,9 @@ fn describe(tok: &Tok) -> String {
 fn starts_value(tok: &Tok) -> bool {
     match tok {
         Tok::Number(_) | Tok::Str(_) | Tok::Template(_) | Tok::Name(_) => true,
-        Tok::Keyword(word) => word == "참" || word == "거짓",
+        Tok::Keyword(word) => {
+            matches!(word.as_str(), "참" | "거짓" | "없음" | "목록" | "사전")
+        }
         Tok::Symbol(ch) => *ch == '[' || *ch == '{',
         _ => false,
     }
@@ -559,57 +561,37 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            Tok::Keyword(word) if word == "없음" => {
+                self.at += 1;
+                Ok(Expr::Literal {
+                    value: Literal::Nothing,
+                    span,
+                })
+            }
+            Tok::Keyword(word) if word == "목록" => {
+                self.at += 1;
+                Ok(Expr::List {
+                    items: Vec::new(),
+                    span,
+                })
+            }
+            Tok::Keyword(word) if word == "사전" => {
+                self.at += 1;
+                Ok(Expr::Dict {
+                    entries: Vec::new(),
+                    span,
+                })
+            }
             Tok::Name(name) => {
                 let name = name.clone();
                 self.at += 1;
                 Ok(Expr::Name { name, span })
-            }
-            Tok::Symbol('[') => {
-                self.at += 1;
-                let mut items = Vec::new();
-                if !self.at_symbol(0, ']') {
-                    items.push(self.bracket_item()?);
-                    while self.accept(&Tok::Symbol(',')) {
-                        items.push(self.bracket_item()?);
-                    }
-                }
-                self.expect(&Tok::Symbol(']'), "목록을 닫는 ']'가")?;
-                Ok(Expr::List { items, span })
-            }
-            Tok::Symbol('{') => {
-                self.at += 1;
-                let mut entries = Vec::new();
-                if !self.at_symbol(0, '}') {
-                    entries.push(self.dict_entry()?);
-                    while self.accept(&Tok::Symbol(',')) {
-                        entries.push(self.dict_entry()?);
-                    }
-                }
-                self.expect(&Tok::Symbol('}'), "사전을 닫는 '}'가")?;
-                Ok(Expr::Dict { entries, span })
             }
             other => Err(Diag::syntax(
                 format!("값이 아님: {}", describe(other)),
                 span,
             )),
         }
-    }
-
-    fn bracket_item(&mut self) -> Result<Expr> {
-        self.reduce_until(
-            |tok| matches!(tok, Tok::Symbol(',') | Tok::Symbol(']')),
-            "목록의 항",
-        )
-    }
-
-    fn dict_entry(&mut self) -> Result<(String, Expr)> {
-        let (key, _) = self.expect_name()?;
-        self.expect(&Tok::Symbol(':'), "열쇠 뒤의 쌍점이")?;
-        let value = self.reduce_until(
-            |tok| matches!(tok, Tok::Symbol(',') | Tok::Symbol('}')),
-            "사전의 값",
-        )?;
-        Ok((key, value))
     }
 
     fn reduce_until(&mut self, stop: fn(&Tok) -> bool, what: &str) -> Result<Expr> {
@@ -713,7 +695,8 @@ impl<'a> Parser<'a> {
         }
         let lone_value = matches!(token.tok, Tok::Number(_) | Tok::Str(_))
             || self.keyword_at(0, "참")
-            || self.keyword_at(0, "거짓");
+            || self.keyword_at(0, "거짓")
+            || self.keyword_at(0, "없음");
         if lone_value && matches!(self.ahead(1).tok, Tok::Newline) {
             let expr = self.primary()?;
             self.expect(&Tok::Newline, "줄바꿈이")?;
@@ -984,15 +967,9 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        let kind = if head.ends_with("이다") {
-            DefKind::Predicate
-        } else {
-            DefKind::Verb
-        };
         let body = self.block()?;
         Ok(Stmt::Define {
             name: head,
-            kind,
             params,
             body,
             span,
@@ -1112,7 +1089,6 @@ impl<'a> Parser<'a> {
     fn exec_or_loop(&mut self) -> Result<Stmt> {
         let mut slots: Vec<Slot> = Vec::new();
         let mut calls: Vec<CallExpr> = Vec::new();
-        let mut aux: Option<VerbInfo> = None;
         loop {
             let token = self.ahead(0);
             if self.keyword_at(0, "간격") {
@@ -1172,16 +1148,6 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
             }
-            if info.ending == Ending::Auxiliary {
-                aux = Some(info);
-                continue;
-            }
-            if let Some(helper) = aux.take() {
-                if info.ending == Ending::Final && info.name == "두다" {
-                    return self.auxiliary_statement(helper, slots);
-                }
-                aux = Some(helper);
-            }
             match info.ending {
                 Ending::AdnominalPast | Ending::AdnominalPres | Ending::Interrogative => {
                     let (value, kept) = self.reduce(slots, info)?;
@@ -1216,41 +1182,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-    }
-
-    fn auxiliary_statement(&mut self, helper: VerbInfo, slots: Vec<Slot>) -> Result<Stmt> {
-        let mut name = None;
-        let mut kept = Vec::new();
-        for slot in slots {
-            if slot.marker == Marker::Case("로") && name.is_none() {
-                if let Some(found) = slot.expr.as_name() {
-                    name = Some(found.to_string());
-                    continue;
-                }
-            }
-            kept.push(slot);
-        }
-        let Some(name) = name else {
-            return Err(Diag::syntax(
-                "자원문에 열어 둔 것을 받을 이름이 없음",
-                helper.span,
-            ));
-        };
-        let call = CallExpr {
-            verb: helper.name,
-            slots: kept,
-            negated: false,
-            asks: false,
-            tail: None,
-            span: helper.span,
-        };
-        let body = self.block()?;
-        Ok(Stmt::With {
-            call,
-            name,
-            body,
-            span: helper.span,
-        })
     }
 
     fn range_loop(&mut self, slots: Vec<Slot>, span: Span) -> Result<Stmt> {

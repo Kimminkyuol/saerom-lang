@@ -119,11 +119,7 @@ fn fail(kind: &str, message: String) -> ! {
         Some(at) => eprintln!("{at}: {kind}: {message}"),
         None => eprintln!("{kind}: {message}"),
     }
-    if std::env::var_os("SAEROM_BACKTRACE").is_some() {
-        eprint!("{}", trace());
-    } else {
-        eprintln!("참고: SAEROM_BACKTRACE=1 로 역추적을 볼 수 있음");
-    }
+    eprint!("{}", trace());
     std::process::exit(1);
 }
 
@@ -242,19 +238,6 @@ fn deep_copy(found: &Value) -> Value {
     }
 }
 
-const ORDINALS: [&str; 10] = [
-    "첫째",
-    "둘째",
-    "셋째",
-    "넷째",
-    "다섯째",
-    "여섯째",
-    "일곱째",
-    "여덟째",
-    "아홉째",
-    "열째",
-];
-
 fn at_index(found: &Value, index: usize, field: &str, size: usize) -> Value {
     if index >= size {
         fail("값 오류", format!("'{field}' 없음. 개수는 {size}"))
@@ -282,10 +265,6 @@ pub unsafe extern "C" fn sr_field_get(
 ) {
     let owner = at(owner);
     let field = name_of(bytes, len);
-    if field == "복사본" {
-        *out = deep_copy(owner);
-        return;
-    }
     if field == "자료형" {
         *out = Value::text(owner.type_name().to_string());
         return;
@@ -310,10 +289,6 @@ pub unsafe extern "C" fn sr_field_get(
         if (field == "개수" && owner.tag == LIST) || (field == "글자수" && owner.tag == STR)
         {
             *out = Value::int(size as i64);
-            return;
-        }
-        if let Some(index) = ORDINALS.iter().position(|found| *found == field) {
-            *out = at_index(owner, index, field, size);
             return;
         }
         if field == "마지막" {
@@ -347,7 +322,7 @@ pub unsafe extern "C" fn sr_field_set(
         let field = name_of(bytes, len);
         fail(
             "값 오류",
-            format!("{}에 열쇠 '{field}' 매길 수 없음", found.kind()),
+            format!("{}에 '{field}' 접근할 수 없음", found.kind()),
         );
     }
     sr_dict_put(owner, bytes, len, value);
@@ -403,6 +378,10 @@ pub unsafe extern "C" fn sr_add(out: *mut Value, left: *const Value, right: *con
             target.borrow_mut().push(*right);
         }
         *out = *left;
+        return;
+    }
+    if left.tag == STR {
+        *out = Value::text(format!("{}{}", left.as_text(), to_text(right)));
         return;
     }
     arith(
@@ -561,66 +540,6 @@ pub unsafe extern "C" fn sr_convert(out: *mut Value, found: *const Value, kind: 
     };
 }
 
-fn pieces(found: &Value) -> Vec<String> {
-    match found.tag {
-        LIST => found.as_list().borrow().iter().map(to_text).collect(),
-        _ => vec![to_text(found)],
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_join(out: *mut Value, found: *const Value) {
-    *out = Value::text(pieces(at(found)).concat());
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_join_with(out: *mut Value, found: *const Value, sep: *const Value) {
-    *out = Value::text(pieces(at(found)).join(&to_text(at(sep))));
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_split(out: *mut Value, found: *const Value, sep: *const Value) {
-    let text = to_text(at(found));
-    let mark = to_text(at(sep));
-    let parts: Vec<Value> = if mark.is_empty() {
-        text.chars().map(|ch| Value::text(ch.to_string())).collect()
-    } else {
-        text.split(&mark)
-            .map(|part| Value::text(part.to_string()))
-            .collect()
-    };
-    *out = Value::list(parts);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_contains(out: *mut Value, whole: *const Value, part: *const Value) {
-    let (whole, part) = (at(whole), at(part));
-    *out = Value::bool(if whole.tag == LIST {
-        whole
-            .as_list()
-            .borrow()
-            .iter()
-            .any(|item| equal(item, part))
-    } else {
-        to_text(whole).contains(&to_text(part))
-    });
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_starts(out: *mut Value, whole: *const Value, part: *const Value) {
-    *out = Value::bool(to_text(at(whole)).starts_with(&to_text(at(part))));
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_ends(out: *mut Value, whole: *const Value, part: *const Value) {
-    *out = Value::bool(to_text(at(whole)).ends_with(&to_text(at(part))));
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_trim(out: *mut Value, found: *const Value) {
-    *out = Value::text(to_text(at(found)).trim().to_string());
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn sr_check_bool(found: *const Value, bytes: *const u8, len: usize) {
     let found = at(found);
@@ -706,96 +625,85 @@ pub unsafe extern "C" fn sr_truthy_value(out: *mut Value, found: *const Value) {
     *out = Value::bool(at(found).truthy());
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn sr_open(out: *mut Value, target: *const Value) {
-    let path = to_text(at(target));
-    let found = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path);
-    *out = match found {
-        Ok(file) => Value::handle(Handle {
-            file: std::cell::RefCell::new(Some(file)),
-            path,
-            written: std::cell::Cell::new(false),
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            fail("파일 오류", "권한없음".to_string())
-        }
-        Err(_) => fail("파일 오류", "파일없음".to_string()),
-    };
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_read(out: *mut Value, target: *const Value) {
-    use std::io::{Read, Seek};
-    let target = at(target);
-    if target.tag == FILE {
-        let handle = target.as_handle();
-        let mut slot = handle.file.borrow_mut();
-        let Some(file) = slot.as_mut() else {
-            fail("파일 오류", "닫힌파일".to_string());
-        };
-        let _ = file.flush();
-        let _ = file.seek(std::io::SeekFrom::Start(0));
-        let mut text = String::new();
-        *out = match file.read_to_string(&mut text) {
-            Ok(_) => Value::text(text),
-            Err(_) => fail("파일 오류", "읽을수없음".to_string()),
-        };
-        return;
-    }
-    *out = match std::fs::read_to_string(to_text(target)) {
-        Ok(text) => Value::text(text),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            fail("파일 오류", "권한없음".to_string())
-        }
-        Err(_) => fail("파일 오류", "파일없음".to_string()),
-    };
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_write(target: *const Value, value: *const Value) {
-    use std::io::Seek;
-    let target = at(target);
-    if target.tag != FILE {
-        fail("값 오류", "'쓰다'의 '~에' 자리가 파일이 아님".to_string())
-    }
-    let handle = target.as_handle();
-    let mut slot = handle.file.borrow_mut();
-    let Some(file) = slot.as_mut() else {
-        fail("파일 오류", "닫힌파일".to_string());
-    };
-    if !handle.written.get() {
-        let _ = file.seek(std::io::SeekFrom::Start(0));
-        let _ = file.set_len(0);
-        handle.written.set(true);
-    }
-    let _ = file.write_all(to_text(at(value)).as_bytes());
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_close(target: *const Value) {
-    let target = at(target);
-    if target.tag == FILE {
-        let _ = target.as_handle().file.borrow_mut().take();
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_readline(out: *mut Value) {
-    let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    *out = match std::io::stdin().read_line(&mut line) {
-        Ok(0) => fail("파일 오류", "입력끝".to_string()),
-        Ok(_) => Value::text(line.trim_end_matches('\n').to_string()),
-        Err(_) => fail("파일 오류", "입력끝".to_string()),
-    };
-}
-
 thread_local! {
     static PARKED: std::cell::RefCell<Vec<Option<(String, String)>>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// 생성된 main 은 Rust 의 뒷정리를 거치지 않는다. 끝내기 전에 손수 비운다.
+#[no_mangle]
+pub extern "C" fn sr_finish() {
+    let _ = std::io::stdout().flush();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_clone(out: *mut Value, found: *const Value) {
+    *out = deep_copy(at(found));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *const Value) {
+    use std::os::unix::ffi::OsStrExt;
+    let name = to_text(at(path));
+    let mode = to_text(at(how));
+    let mut open = std::fs::OpenOptions::new();
+    match mode.as_str() {
+        "읽기" => open.read(true),
+        "쓰기" => open.write(true).create(true).truncate(true),
+        "덧쓰기" => open.append(true).create(true),
+        _ => fail("값 오류", format!("모르는 여는 방식: '{mode}'")),
+    };
+    let found = open.open(std::ffi::OsStr::from_bytes(name.as_bytes()));
+    *out = match found {
+        Ok(file) => {
+            use std::os::unix::io::IntoRawFd;
+            Value::int(file.into_raw_fd() as i64)
+        }
+        Err(error) => fail("파일 오류", format!("'{name}'을 열 수 없음: {error}")),
+    };
+}
+
+fn descriptor(verb: &str, found: &Value) -> i32 {
+    if found.tag != INT {
+        fail(
+            "값 오류",
+            format!("'{verb}'의 서술자가 정수가 아님: {}", show(found)),
+        );
+    }
+    found.as_int() as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *const Value) {
+    use std::io::Read;
+    use std::os::unix::io::FromRawFd;
+    let fd = descriptor("읽다", at(file));
+    let want = descriptor("읽다", at(count)).max(0) as usize;
+    let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
+    let mut buffer = vec![0u8; want];
+    let read = held.read(&mut buffer).unwrap_or_else(|error| {
+        fail("파일 오류", format!("읽을 수 없음: {error}"));
+    });
+    buffer.truncate(read);
+    *out = Value::text(String::from_utf8_lossy(&buffer).into_owned());
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_write(out: *mut Value, file: *const Value, text: *const Value) {
+    use std::os::unix::io::FromRawFd;
+    let fd = descriptor("쓰다", at(file));
+    let body = to_text(at(text));
+    let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
+    let written = held.write(body.as_bytes()).unwrap_or_else(|error| {
+        fail("파일 오류", format!("쓸 수 없음: {error}"));
+    });
+    let _ = held.flush();
+    *out = Value::int(written as i64);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_close(file: *const Value) {
+    use std::os::unix::io::FromRawFd;
+    let fd = descriptor("닫다", at(file));
+    drop(std::fs::File::from_raw_fd(fd));
 }

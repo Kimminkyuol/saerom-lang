@@ -93,18 +93,11 @@ pub enum Stmt {
         value: Expr,
         span: Span,
     },
-    With {
-        call: Expr,
-        place: Place,
-        body: Vec<Stmt>,
-        span: Span,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Verb,
-    Predicate,
     Noun,
 }
 

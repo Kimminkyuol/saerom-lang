@@ -131,6 +131,7 @@ fn joined(verb: &str, left: &Expr, right: &Expr) -> Tree {
 fn expr_tree(expr: &Expr) -> Tree {
     match expr {
         Expr::Literal { value, .. } => leaf(match value {
+            Literal::Nothing => "lit nothing".to_string(),
             Literal::Int(found) => format!("lit int {found}"),
             Literal::Float(found) => format!("lit float {found:?}"),
             Literal::Str(found) => format!("lit str {}", escape(found)),
@@ -243,25 +244,14 @@ fn statement_tree(statement: &Stmt) -> Tree {
         Stmt::Continue { .. } => leaf("continue"),
         Stmt::Return { value, .. } => node("return", vec![expr_tree(value)]),
         Stmt::Define {
-            name,
-            kind,
-            params,
-            body,
-            ..
+            name, params, body, ..
         } => {
             let shown: Vec<String> = params
                 .iter()
                 .map(|(marker, name)| format!("{}:{name}", marker_name(*marker)))
                 .collect();
             node(
-                format!(
-                    "define {name} {} [{}]",
-                    match kind {
-                        crate::ast::DefKind::Verb => "verb",
-                        crate::ast::DefKind::Predicate => "predicate",
-                    },
-                    shown.join(" ")
-                ),
+                format!("define {name} [{}]", shown.join(" ")),
                 vec![block_tree("body", body)],
             )
         }
@@ -270,12 +260,6 @@ fn statement_tree(statement: &Stmt) -> Tree {
         } => node(
             format!("noun {name} of {owner}"),
             vec![block_tree("body", body)],
-        ),
-        Stmt::With {
-            call, name, body, ..
-        } => node(
-            format!("with {name}"),
-            vec![call_tree(call), block_tree("body", body)],
         ),
         Stmt::Import { module, names, .. } => {
             let shown = names
@@ -318,7 +302,6 @@ pub fn hir(program: &hir::Program) -> String {
             function.name,
             match function.kind {
                 hir::Kind::Verb => "verb",
-                hir::Kind::Predicate => "predicate",
                 hir::Kind::Noun => "noun",
             },
             function.module,
@@ -412,12 +395,6 @@ fn hir_stmt(program: &hir::Program, statement: &hir::Stmt) -> Tree {
         S::Break => leaf("break"),
         S::Continue => leaf("continue"),
         S::Return { value, .. } => node("return", vec![hir_expr(program, value)]),
-        S::With {
-            call, place, body, ..
-        } => node(
-            format!("with {}", place_name(*place)),
-            vec![hir_expr(program, call), hir_block(program, "body", body)],
-        ),
     }
 }
 
@@ -477,4 +454,28 @@ fn hir_expr(program: &hir::Program, expr: &hir::Expr) -> Tree {
             vec![hir_expr(program, left), hir_expr(program, right)],
         ),
     }
+}
+
+pub fn types(program: &hir::Program) -> String {
+    let found = crate::types::infer(program);
+    let mut out = String::new();
+    out.push_str("globals\n");
+    for (slot, ty) in found.globals.iter().enumerate() {
+        out.push_str(&format!("  {slot}: {ty:?}\n"));
+    }
+    for (id, function) in program.functions.iter().enumerate() {
+        out.push_str(&format!(
+            "fn #{id} {} -> {:?}\n",
+            function.name, found.returns[id]
+        ));
+        for (slot, ty) in found.locals[id].iter().enumerate() {
+            let role = if function.params.contains(&(slot as u32)) {
+                "매개변수"
+            } else {
+                "지역"
+            };
+            out.push_str(&format!("  {role} {slot}: {ty:?}\n"));
+        }
+    }
+    out
 }

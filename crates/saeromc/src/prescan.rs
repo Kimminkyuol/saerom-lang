@@ -104,11 +104,7 @@ fn imported_stems(
 
 pub fn resolve_module(name: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
     let wanted = crate::hangul::to_nfc(&format!("{name}.sr"));
-    let found = base_dir
-        .into_iter()
-        .map(Path::to_path_buf)
-        .chain(standard_library())
-        .find_map(|folder| find_in(&folder, &wanted))?;
+    let found = find_in(base_dir?, &wanted)?;
     Some(found.canonicalize().unwrap_or(found))
 }
 
@@ -121,15 +117,6 @@ fn find_in(folder: &Path, wanted: &str) -> Option<PathBuf> {
         let name = entry.file_name();
         (crate::hangul::to_nfc(&name.to_string_lossy()) == wanted).then(|| entry.path())
     })
-}
-
-fn standard_library() -> Option<PathBuf> {
-    if let Ok(set) = std::env::var("SAEROM_STD") {
-        return Some(PathBuf::from(set));
-    }
-    let exe = std::env::current_exe().ok()?;
-    let found = exe.parent()?.parent()?.parent()?.join("std");
-    found.is_dir().then_some(found)
 }
 
 #[derive(Default, Clone)]

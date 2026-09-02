@@ -12,6 +12,7 @@ pub mod parse;
 pub mod prescan;
 pub mod resolve;
 pub mod sig;
+pub mod types;
 pub mod words;
 
 use diag::Diag;
@@ -77,9 +78,14 @@ pub fn analyze(
     }
 }
 
-pub fn compile(source: &str, path: Option<&Path>, triple: &str) -> Result<String, Failure> {
+pub fn compile(
+    source: &str,
+    path: Option<&Path>,
+    triple: &str,
+    frames: bool,
+) -> Result<String, Failure> {
     let (loaded, program) = analyze(source, path)?;
-    emit::emit(&program, triple).map_err(|errors| Failure {
+    emit::emit(&program, triple, frames).map_err(|errors| Failure {
         loaded: Some(loaded),
         errors,
     })

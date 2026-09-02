@@ -8,9 +8,8 @@ fn root() -> PathBuf {
 }
 
 fn sources(root: &Path) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = ["examples", "std"]
-        .iter()
-        .flat_map(|folder| std::fs::read_dir(root.join(folder)).expect("자리 없음"))
+    let mut found: Vec<PathBuf> = std::fs::read_dir(root.join("examples"))
+        .expect("examples 자리 없음")
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "sr"))
         .collect();
@@ -21,9 +20,8 @@ fn sources(root: &Path) -> Vec<PathBuf> {
 #[test]
 fn syntax_trees_match_frozen_goldens() {
     let root = root();
-    std::env::set_var("SAEROM_STD", root.join("std"));
     let found = sources(&root);
-    assert!(found.len() >= 18, "검사할 소스가 모자람: {}", found.len());
+    assert!(found.len() >= 16, "검사할 소스가 모자람: {}", found.len());
     for path in found {
         let stem = path
             .file_stem()

@@ -7,19 +7,12 @@ pub const FLOAT: u64 = 3;
 pub const STR: u64 = 4;
 pub const LIST: u64 = 5;
 pub const DICT: u64 = 6;
-pub const FILE: u64 = 7;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Value {
     pub tag: u64,
     pub bits: u64,
-}
-
-pub struct Handle {
-    pub file: RefCell<Option<std::fs::File>>,
-    pub path: String,
-    pub written: std::cell::Cell<bool>,
 }
 
 impl Value {
@@ -72,13 +65,6 @@ impl Value {
         }
     }
 
-    pub fn handle(found: Handle) -> Value {
-        Value {
-            tag: FILE,
-            bits: leak(found),
-        }
-    }
-
     pub fn as_int(&self) -> i64 {
         self.bits as i64
     }
@@ -103,10 +89,6 @@ impl Value {
         unsafe { &*(self.bits as *const RefCell<Vec<(String, Value)>>) }
     }
 
-    pub fn as_handle(&self) -> &'static Handle {
-        unsafe { &*(self.bits as *const Handle) }
-    }
-
     pub fn number(&self) -> bool {
         self.tag == INT || self.tag == FLOAT
     }
@@ -126,7 +108,6 @@ impl Value {
             STR => "문자열",
             LIST => "목록",
             DICT => "사전",
-            FILE => "파일",
             _ => "값",
         }
     }

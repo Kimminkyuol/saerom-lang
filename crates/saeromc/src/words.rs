@@ -53,9 +53,10 @@ pub const KEYWORDS: &[&str] = &[
     "동안",
     "참",
     "거짓",
+    "없음",
+    "목록",
+    "사전",
     "간격",
-    "끝으로",
-    "오류",
 ];
 
 pub const HADA_FORMS: &[(&str, Ending)] = &[
@@ -138,21 +139,9 @@ pub const BUILTIN_VERBS: &[Builtin] = &[
     verb("반복하다", "반복하"),
     verb("빠져나가다", "빠져나가"),
     verb("하다", "하"),
-    verb("두다", "두"),
     verb("읽다", "읽"),
-    verb("입력받다", "입력받"),
     verb("쓰다", "쓰"),
     verb("가져오다", "가져오"),
-    verb("시작하다", "시작하"),
-    verb("담다", "담"),
-    verb("끝나다", "끝나"),
-    verb("다듬다", "다듬"),
-    Builtin {
-        name: "자르다",
-        stem: "자르",
-        pos: Pos::Verb,
-        overrides: &[(Ending::AdnominalPast, "자른"), (Ending::Auxiliary, "잘라")],
-    },
     verb("넘어가다", "넘어가"),
     verb("돌려주다", "돌려주"),
     Builtin {
@@ -193,6 +182,7 @@ pub const BUILTIN_VERBS: &[Builtin] = &[
         ],
     },
     verb("열다", "열"),
+    verb("닫다", "닫"),
     Builtin {
         name: "크다",
         stem: "크",

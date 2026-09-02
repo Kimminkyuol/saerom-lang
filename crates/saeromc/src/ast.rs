@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub enum Literal {
+    Nothing,
     Int(i64),
     Float(f64),
     Str(String),
@@ -114,12 +115,6 @@ pub struct Target {
 
 pub type Block = Vec<Stmt>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DefKind {
-    Verb,
-    Predicate,
-}
-
 #[derive(Clone, Debug)]
 pub enum LoopKind {
     Range {
@@ -170,7 +165,6 @@ pub enum Stmt {
     },
     Define {
         name: String,
-        kind: DefKind,
         params: Vec<(Marker, String)>,
         body: Block,
         span: Span,
@@ -178,12 +172,6 @@ pub enum Stmt {
     Noun {
         name: String,
         owner: String,
-        body: Block,
-        span: Span,
-    },
-    With {
-        call: CallExpr,
-        name: String,
         body: Block,
         span: Span,
     },
@@ -208,7 +196,6 @@ impl Stmt {
             | Stmt::Return { span, .. }
             | Stmt::Define { span, .. }
             | Stmt::Noun { span, .. }
-            | Stmt::With { span, .. }
             | Stmt::Import { span, .. } => *span,
         }
     }

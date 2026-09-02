@@ -157,7 +157,6 @@ impl Lexer<'_> {
 
     fn scan_line(&self, chars: &[char], line: usize) -> Result<Vec<Token>> {
         let mut out: Vec<Token> = Vec::new();
-        let mut brackets: Vec<char> = Vec::new();
         let mut i = 0;
         while i < chars.len() {
             let ch = chars[i];
@@ -180,21 +179,14 @@ impl Lexer<'_> {
                     j,
                 ));
                 i = j;
-            } else if "[],:.{}".contains(ch) {
-                match ch {
-                    '[' | '{' => brackets.push(ch),
-                    ']' | '}' => {
-                        brackets.pop();
-                    }
-                    _ => {}
-                }
+            } else if ".:".contains(ch) {
                 out.push(Token::new(Tok::Symbol(ch), line, i, i + 1));
                 i += 1;
             } else if is_word_char(ch) {
                 let j = word_end(chars, i);
                 let chunk: String = chars[i..j].iter().collect();
                 let splitting = Splitting {
-                    take_particle: !is_dict_key(&out, &brackets, chars, j),
+                    take_particle: true,
                     take_copula: true,
                 };
                 out.extend(self.split_word(&chunk, line, i, j, splitting)?);
@@ -291,16 +283,6 @@ impl Lexer<'_> {
         }
         one(Tok::Name(chunk.into()))
     }
-}
-
-/// `{나이: 17}` -> `나` + `이` 방지
-fn is_dict_key(out: &[Token], brackets: &[char], chars: &[char], stop: usize) -> bool {
-    brackets.last() == Some(&'{')
-        && matches!(
-            out.last().map(|t| &t.tok),
-            Some(Tok::Symbol('{') | Tok::Symbol(','))
-        )
-        && chars.get(stop) == Some(&':')
 }
 
 fn is_word_char(ch: char) -> bool {
