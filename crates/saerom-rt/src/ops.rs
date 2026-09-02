@@ -1,3 +1,5 @@
+use crate::msg;
+use crate::report::{self, Report};
 use crate::text::{show, to_text};
 use crate::value::*;
 use std::io::Write;
@@ -31,10 +33,12 @@ pub struct Source {
 pub static mut SR_POS: u64 = 0;
 
 static mut SOURCES: (*const Source, usize) = (std::ptr::null(), 0);
+static mut TRACED: bool = false;
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_sources(table: *const Source, count: usize) {
+pub unsafe extern "C" fn sr_sources(table: *const Source, count: usize, traced: i8) {
     SOURCES = (table, count);
+    TRACED = traced != 0;
 }
 
 unsafe fn source_at(index: usize) -> Option<(&'static str, &'static str)> {
@@ -66,47 +70,68 @@ pub static mut SR_AT: [u64; FRAMES] = [0; FRAMES];
 #[no_mangle]
 pub static mut SR_DEPTH: u32 = 0;
 
-fn spot(packed: u64) -> Option<String> {
+struct Spot {
+    path: &'static str,
+    text: &'static str,
+    line: usize,
+    col: usize,
+    end: usize,
+}
+
+fn spot(packed: u64) -> Option<Spot> {
     let module = (packed >> 48) as usize;
     let line = ((packed >> 24) & 0xFF_FFFF) as usize;
     let col = ((packed >> 12) & 0xFFF) as usize;
+    let width = (packed & 0xFFF) as usize;
     if line == 0 {
         return None;
     }
-    let (name, _) = unsafe { source_at(module) }?;
-    Some(format!("{name}:{line}:{}", col + 1))
+    let (path, text) = unsafe { source_at(module) }?;
+    Some(Spot {
+        path,
+        text,
+        line,
+        col,
+        end: col + width,
+    })
+}
+
+fn where_at(packed: u64) -> Option<String> {
+    let spot = spot(packed)?;
+    Some(format!("{}:{}:{}", spot.path, spot.line, spot.col + 1))
 }
 
 fn frame_name(level: usize) -> String {
     let site =
         unsafe { std::ptr::read((&raw const SR_FRAMES).cast::<*const Site>().add(level)) };
     if site.is_null() {
-        return "<모름>".to_string();
+        return msg::FRAME_UNKNOWN.to_string();
     }
     let site = unsafe { &*site };
     unsafe { name_of(site.name, site.name_len) }.to_string()
 }
 
+fn frame(level: usize, name: &str, here: u64) -> String {
+    let mut out = format!("{}: {name}\n", report::blue(&format!("{level:>4}")));
+    if let Some(at) = where_at(here) {
+        out.push_str(&format!("             at {at}\n"));
+    }
+    out
+}
+
 fn trace() -> String {
+    if !unsafe { std::ptr::read(&raw const TRACED) } {
+        return report::note(msg::TRACE_OFF);
+    }
     let depth = unsafe { std::ptr::read(&raw const SR_DEPTH) } as usize;
     let shown = depth.min(FRAMES);
-    let mut out = String::from("역추적:\n");
+    let mut out = format!("{}\n", report::bold(msg::TRACE));
     let mut here = unsafe { std::ptr::read(&raw const SR_POS) };
     for level in (0..shown).rev() {
-        out.push_str(&format!(
-            "  {:>2}: {}\n",
-            shown - 1 - level,
-            frame_name(level)
-        ));
-        if let Some(at) = spot(here) {
-            out.push_str(&format!("        at {at}\n"));
-        }
+        out.push_str(&frame(shown - 1 - level, &frame_name(level), here));
         here = unsafe { std::ptr::read((&raw const SR_AT).cast::<u64>().add(level)) };
     }
-    out.push_str(&format!("  {shown:>2}: <맨바깥>\n"));
-    if let Some(at) = spot(here) {
-        out.push_str(&format!("        at {at}\n"));
-    }
+    out.push_str(&frame(shown, msg::FRAME_TOP, here));
     out
 }
 
@@ -114,23 +139,36 @@ fn fail(kind: &str, message: String) -> ! {
     let _ = std::io::stdout().flush();
     let here = unsafe { std::ptr::read(&raw const SR_POS) };
     match spot(here) {
-        Some(at) => eprintln!("{at}: {kind}: {message}"),
-        None => eprintln!("{kind}: {message}"),
+        Some(spot) => eprint!(
+            "{}",
+            Report {
+                kind,
+                msg: &message,
+                hint: None,
+                path: spot.path,
+                source: Some(spot.text),
+                line: spot.line,
+                col: spot.col,
+                end: spot.end,
+            }
+            .render()
+        ),
+        None => eprint!("{}", report::plain(kind, &message)),
     }
-    eprint!("{}", trace());
+    eprint!("\n{}", trace());
     std::process::exit(1);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_stop(message: *const Value) {
-    fail("종료", to_text(at(message)));
+    fail(msg::STOP, to_text(at(message)));
 }
 
 fn numbers(verb: &str, values: [&Value; 2]) {
     if let Some(odd) = values.iter().find(|value| !value.number()) {
         fail(
-            "값 오류",
-            format!("'{verb}'의 인자가 수가 아님: {} {}", odd.kind(), show(odd)),
+            msg::VALUE,
+            msg::arg_not_number(verb, odd.kind(), &show(odd)),
         )
     }
 }
@@ -238,7 +276,7 @@ fn deep_copy(found: &Value) -> Value {
 
 fn at_index(found: &Value, index: usize, field: &str, size: usize) -> Value {
     if index >= size {
-        fail("값 오류", format!("'{field}'에 접근할 수 없음 (크기: {size})"))
+        fail(msg::VALUE, msg::empty_at(field, size))
     }
     match found.tag {
         LIST => found.as_list().borrow()[index],
@@ -300,12 +338,9 @@ pub unsafe extern "C" fn sr_field_get(
         }
     }
     if owner.tag == DICT {
-        fail("이름 오류", format!("'{field}' 접근할 수 없음"));
+        fail(msg::NAME, msg::no_field(field));
     }
-    fail(
-        "이름 오류",
-        format!("{}에 '{field}' 접근할 수 없음", owner.kind()),
-    );
+    fail(msg::NAME, msg::no_field_on(owner.kind(), field));
 }
 
 #[no_mangle]
@@ -318,10 +353,7 @@ pub unsafe extern "C" fn sr_field_set(
     let found = at(owner);
     if found.tag != DICT {
         let field = name_of(bytes, len);
-        fail(
-            "값 오류",
-            format!("{}에 '{field}' 접근할 수 없음", found.kind()),
-        );
+        fail(msg::VALUE, msg::no_field_on(found.kind(), field));
     }
     sr_dict_put(owner, bytes, len, value);
 }
@@ -331,18 +363,18 @@ pub unsafe extern "C" fn sr_index(out: *mut Value, owner: *const Value, place: *
     let owner = at(owner);
     let place = at(place);
     if place.tag != INT {
-        fail("값 오류", format!("자리가 정수가 아님: {}", to_text(place)));
+        fail(msg::VALUE, msg::place_not_int(&to_text(place)));
     }
     let size = match owner.tag {
         LIST => owner.as_list().borrow().len(),
         STR => owner.as_text().chars().count(),
         _ => {
-            fail("이름 오류", format!("{}에 자리가 없음", owner.kind()));
+            fail(msg::NAME, msg::no_place(owner.kind()));
         }
     };
     let index = place.as_int();
     if index < 1 || index as usize > size {
-        fail("값 오류", format!("{index}번째 없음 (크기: {size})"));
+        fail(msg::VALUE, msg::out_of_range(index, size));
     }
     *out = at_index(owner, index as usize - 1, "자리", size);
 }
@@ -430,7 +462,7 @@ fn divisor(left: &Value, right: &Value) -> (f64, f64) {
     numbers("나누다", [left, right]);
     let divisor = right.number_value();
     if divisor == 0.0 {
-        fail("산술 오류", "0으로 나눌 수 없음".to_string());
+        fail(msg::ARITH, msg::DIV_ZERO.to_string());
     }
     (left.number_value(), divisor)
 }
@@ -466,13 +498,11 @@ fn order(verb: &str, left: &Value, right: &Value) -> std::cmp::Ordering {
         return left.as_text().cmp(right.as_text());
     }
     fail(
-        "값 오류",
-        format!(
-            "'{verb}'로 비교할 수 없음: {} {}, {} {}",
-            left.kind(),
-            show(left),
-            right.kind(),
-            show(right)
+        msg::VALUE,
+        msg::cannot_order(
+            verb,
+            &format!("{} {}", left.kind(), show(left)),
+            &format!("{} {}", right.kind(), show(right)),
         ),
     )
 }
@@ -501,9 +531,7 @@ pub unsafe extern "C" fn sr_not(out: *mut Value, found: *const Value) {
 pub unsafe extern "C" fn sr_convert(out: *mut Value, found: *const Value, kind: *const Value) {
     let found = at(found);
     let kind = to_text(at(kind));
-    let refuse = || -> Value {
-        fail("값 오류", format!("{kind}로 바꿀 수 없음: {}", show(found)))
-    };
+    let refuse = || -> Value { fail(msg::VALUE, msg::cannot_convert(&kind, &show(found))) };
     *out = match kind.as_str() {
         "정수" | "수" => match found.tag {
             INT => *found,
@@ -534,7 +562,7 @@ pub unsafe extern "C" fn sr_convert(out: *mut Value, found: *const Value, kind: 
             },
             _ => Value::bool(found.truthy()),
         },
-        _ => fail("값 오류", format!("바꿀 수 없는 자료형: '{kind}'")),
+        _ => fail(msg::VALUE, msg::unknown_kind(&kind)),
     };
 }
 
@@ -544,16 +572,9 @@ pub unsafe extern "C" fn sr_check_bool(found: *const Value, bytes: *const u8, le
     if found.tag != BOOL {
         let name = name_of(bytes, len);
         if found.tag == NOTHING {
-            fail("값 오류", format!("'{name}' 돌려주는 값이 없음"));
+            fail(msg::VALUE, msg::no_return(name));
         } else {
-            fail(
-                "값 오류",
-                format!(
-                    "'{name}'의 값이 논리값이 아님: {} {}",
-                    found.kind(),
-                    show(found)
-                ),
-            );
+            fail(msg::VALUE, msg::not_bool(name, found.kind(), &show(found)));
         }
     }
 }
@@ -561,10 +582,7 @@ pub unsafe extern "C" fn sr_check_bool(found: *const Value, bytes: *const u8, le
 #[no_mangle]
 pub unsafe extern "C" fn sr_check_value(found: *const Value, bytes: *const u8, len: usize) {
     if at(found).tag == NOTHING {
-        fail(
-            "값 오류",
-            format!("'{}' 돌려주는 값이 없음", name_of(bytes, len)),
-        );
+        fail(msg::VALUE, msg::no_return(name_of(bytes, len)));
     }
 }
 
@@ -648,7 +666,7 @@ pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *cons
         "읽기" => open.read(true),
         "쓰기" => open.write(true).create(true).truncate(true),
         "추가" => open.append(true).create(true),
-        _ => fail("값 오류", format!("정의되지 않은 방식: '{mode}'")),
+        _ => fail(msg::VALUE, msg::bad_mode(&mode)),
     };
     let found = open.open(std::ffi::OsStr::from_bytes(name.as_bytes()));
     *out = match found {
@@ -656,16 +674,13 @@ pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *cons
             use std::os::unix::io::IntoRawFd;
             Value::int(file.into_raw_fd() as i64)
         }
-        Err(error) => fail("파일 오류", format!("'{name}'을 열 수 없음: {error}")),
+        Err(error) => fail(msg::FILE, msg::cannot_open(&name, &error.to_string())),
     };
 }
 
 fn descriptor(verb: &str, found: &Value) -> i32 {
     if found.tag != INT {
-        fail(
-            "값 오류",
-            format!("'{verb}'의 서술자가 정수가 아님: {}", show(found)),
-        );
+        fail(msg::VALUE, msg::not_descriptor(verb, &show(found)));
     }
     found.as_int() as i32
 }
@@ -679,7 +694,7 @@ pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *co
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
     let mut buffer = vec![0u8; want];
     let read = held.read(&mut buffer).unwrap_or_else(|error| {
-        fail("파일 오류", format!("읽을 수 없음: {error}"));
+        fail(msg::FILE, msg::cannot_read(&error.to_string()));
     });
     buffer.truncate(read);
     *out = Value::text(String::from_utf8_lossy(&buffer).into_owned());
@@ -692,7 +707,7 @@ pub unsafe extern "C" fn sr_write(out: *mut Value, file: *const Value, text: *co
     let body = to_text(at(text));
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
     let written = held.write(body.as_bytes()).unwrap_or_else(|error| {
-        fail("파일 오류", format!("쓸 수 없음: {error}"));
+        fail(msg::FILE, msg::cannot_write(&error.to_string()));
     });
     let _ = held.flush();
     *out = Value::int(written as i64);

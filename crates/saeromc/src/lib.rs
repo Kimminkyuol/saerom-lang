@@ -8,8 +8,14 @@ pub mod hir;
 pub mod intern;
 pub mod lex;
 pub mod load;
+pub mod msg {
+    include!("../../../shared/messages.rs");
+}
 pub mod parse;
 pub mod prescan;
+pub mod report {
+    include!("../../../shared/report.rs");
+}
 pub mod resolve;
 pub mod sig;
 pub mod types;
@@ -25,7 +31,7 @@ pub struct Failure {
 
 impl Failure {
     pub fn render(&self, source: &str, path: &str) -> String {
-        match &self.loaded {
+        let mut out = match &self.loaded {
             Some(loaded) => loaded.render(&self.errors),
             None => self
                 .errors
@@ -33,7 +39,14 @@ impl Failure {
                 .map(|error| error.render(source, path))
                 .collect::<Vec<_>>()
                 .join("\n"),
+        };
+        if self.errors.len() > 1 {
+            out.push_str(&report::plain(
+                msg::ERROR,
+                &msg::aborting(self.errors.len()),
+            ));
         }
+        out
     }
 }
 

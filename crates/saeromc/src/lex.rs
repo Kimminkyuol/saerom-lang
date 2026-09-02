@@ -1,5 +1,6 @@
 use crate::diag::{Diag, Result, Span};
 use crate::hangul::{to_nfc, Ending, Pos};
+use crate::msg;
 use crate::words::{self, FormTable};
 use std::collections::HashSet;
 
@@ -114,7 +115,7 @@ pub fn tokenize(source: &str, vocab: &Vocabulary) -> Result<Vec<Token>> {
                 tokens.push(Token::new(Tok::Dedent(depth), line, 0, depth));
             }
             if depth != *indents.last().unwrap() {
-                return Err(Diag::lex("들여쓰기가 맞지 않음", Span::new(line, 0, depth)));
+                return Err(Diag::lex(msg::INDENT_ODD, Span::new(line, 0, depth)));
             }
         }
 
@@ -193,7 +194,7 @@ impl Lexer<'_> {
                 i = j;
             } else {
                 return Err(Diag::lex(
-                    format!("쓸 수 없는 글자: {ch:?}"),
+                    msg::bad_char(&format!("{ch:?}")),
                     Span::new(line, i, i + 1),
                 ));
             }
@@ -321,12 +322,9 @@ fn number(raw: &str, line: usize, col: usize, end: usize) -> Result<Num> {
     if let Ok(value) = raw.parse::<i64>() {
         return Ok(Num::Int(value));
     }
-    raw.parse::<f64>().map(Num::Float).map_err(|_| {
-        Diag::lex(
-            format!("수로 읽을 수 없음: {raw}"),
-            Span::new(line, col, end),
-        )
-    })
+    raw.parse::<f64>()
+        .map(Num::Float)
+        .map_err(|_| Diag::lex(msg::not_number(raw), Span::new(line, col, end)))
 }
 
 fn scan_string(chars: &[char], start: usize, line: usize) -> Result<(Token, usize)> {
@@ -345,11 +343,11 @@ fn scan_string(chars: &[char], start: usize, line: usize) -> Result<(Token, usiz
             continue;
         }
         let close = matching_brace(chars, j)
-            .ok_or_else(|| Diag::lex("'{'가 닫히지 않음", Span::new(line, j, j + 1)))?;
+            .ok_or_else(|| Diag::lex(msg::BRACE_OPEN, Span::new(line, j, j + 1)))?;
         let raw: String = chars[j + 1..close].iter().collect();
         let inner = raw.trim();
         if inner.is_empty() {
-            return Err(Diag::lex("'{}' 안이 비었음", Span::new(line, j, close + 1)));
+            return Err(Diag::lex(msg::BRACE_EMPTY, Span::new(line, j, close + 1)));
         }
         let offset = j + 1 + raw.chars().take_while(|c| c.is_whitespace()).count();
         parts.push(Part::Text(std::mem::take(&mut text)));
@@ -361,7 +359,7 @@ fn scan_string(chars: &[char], start: usize, line: usize) -> Result<(Token, usiz
     }
     if j >= chars.len() {
         return Err(Diag::lex(
-            "따옴표가 닫히지 않음",
+            msg::QUOTE_OPEN,
             Span::new(line, start, start + 1),
         ));
     }

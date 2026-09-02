@@ -1,5 +1,6 @@
 use crate::ast::Stmt;
 use crate::diag::{Diag, Result, Span};
+use crate::msg;
 use crate::{lex, parse, prescan};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -57,7 +58,7 @@ pub fn load(source: &str, path: Option<&Path>) -> Result<Loaded> {
     let mut walk = Walk::default();
     let name = path
         .and_then(|path| path.file_stem())
-        .map_or("<입력>".to_string(), |stem| {
+        .map_or(msg::INPUT_UNIT.to_string(), |stem| {
             stem.to_string_lossy().into_owned()
         });
     let whole = path.map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
@@ -115,14 +116,14 @@ impl Walk {
                 continue;
             }
             if self.open.contains(&path) {
-                let mut error = Diag::new("모듈 오류", format!("'{module}' 순환 참조"), *span);
+                let mut error = Diag::new(msg::MODULE, msg::module_cycle(module), *span);
                 error.unit = Some(from);
                 return Err(error);
             }
             let source = std::fs::read_to_string(&path).map_err(|error| {
                 let mut diag = Diag::new(
-                    "모듈 오류",
-                    format!("'{module}'을 읽을 수 없음: {error}"),
+                    msg::MODULE,
+                    msg::module_unreadable(module, &error.to_string()),
                     *span,
                 );
                 diag.unit = Some(from);

@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::diag::{Diag, Result, Span};
 use crate::hangul::{Ending, Pos};
 use crate::lex::{tokenize, Num, Part, Tok, Token};
+use crate::msg;
 use crate::prescan::{resolve_module, Program};
 use crate::sig::{fits, Marker};
 use crate::words;
@@ -88,10 +89,10 @@ impl<'a> Parser<'a> {
         }
         let token = self.ahead(0);
         if matches!(token.tok, Tok::Newline | Tok::Eof) {
-            return Err(Diag::syntax(format!("{what} 없이 줄이 끝남"), token.span));
+            return Err(Diag::syntax(msg::line_ended(what), token.span));
         }
         Err(Diag::syntax(
-            format!("{what} 아님: {}", describe(&token.tok)),
+            msg::not_wanted(what, &describe(&token.tok)),
             token.span,
         ))
     }
@@ -102,10 +103,7 @@ impl<'a> Parser<'a> {
                 let name = name.clone();
                 Ok((name, self.advance().span))
             }
-            other => Err(Diag::syntax(
-                format!("이름이 아님: {}", describe(other)),
-                self.span(),
-            )),
+            other => Err(Diag::syntax(msg::not_a_name(&describe(other)), self.span())),
         }
     }
 
@@ -117,7 +115,7 @@ impl<'a> Parser<'a> {
                 Ok(canon)
             }
             other => Err(Diag::syntax(
-                format!("조사가 아님: {}", describe(other)),
+                msg::not_a_particle(&describe(other)),
                 self.span(),
             )),
         }
@@ -176,10 +174,10 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<Block> {
-        self.expect(&Tok::Symbol(':'), "블록을 여는 쌍점이")?;
-        self.expect(&Tok::Newline, "줄바꿈이")?;
+        self.expect(&Tok::Symbol(':'), msg::WANT_COLON)?;
+        self.expect(&Tok::Newline, msg::WANT_NEWLINE)?;
         if !matches!(self.peek(), Tok::Indent(_)) {
-            return Err(Diag::syntax("들여쓴 블록이 없음", self.span()));
+            return Err(Diag::syntax(msg::NO_BLOCK, self.span()));
         }
         self.at += 1;
         let mut statements = Vec::new();
@@ -207,19 +205,19 @@ impl<'a> Parser<'a> {
 
 fn describe(tok: &Tok) -> String {
     match tok {
-        Tok::Name(name) => format!("이름 '{name}'"),
-        Tok::Verb { name, .. } => format!("동사 '{name}'"),
-        Tok::Copula { .. } => "'이다'".into(),
-        Tok::Particle { canon, .. } => format!("조사 '{canon}'"),
-        Tok::Keyword(word) => format!("예약어 '{word}'"),
-        Tok::Number(Num::Int(value)) => format!("수 '{value}'"),
-        Tok::Number(Num::Float(value)) => format!("수 '{value}'"),
-        Tok::Str(_) | Tok::Template(_) => "글".into(),
-        Tok::Symbol(ch) => format!("기호 '{ch}'"),
-        Tok::Indent(_) => "들여쓰기".into(),
-        Tok::Dedent(_) => "내어쓰기".into(),
-        Tok::Newline => "줄 끝".into(),
-        Tok::Eof => "파일 끝".into(),
+        Tok::Name(name) => format!("{} '{name}'", msg::TOK_NAME),
+        Tok::Verb { name, .. } => format!("{} '{name}'", msg::TOK_VERB),
+        Tok::Copula { .. } => msg::TOK_COPULA.into(),
+        Tok::Particle { canon, .. } => format!("{} '{canon}'", msg::TOK_PARTICLE),
+        Tok::Keyword(word) => format!("{} '{word}'", msg::TOK_KEYWORD),
+        Tok::Number(Num::Int(value)) => format!("{} '{value}'", msg::TOK_NUMBER),
+        Tok::Number(Num::Float(value)) => format!("{} '{value}'", msg::TOK_NUMBER),
+        Tok::Str(_) | Tok::Template(_) => msg::TOK_STRING.into(),
+        Tok::Symbol(ch) => format!("{} '{ch}'", msg::TOK_SYMBOL),
+        Tok::Indent(_) => msg::TOK_INDENT.into(),
+        Tok::Dedent(_) => msg::TOK_DEDENT.into(),
+        Tok::Newline => msg::TOK_NEWLINE.into(),
+        Tok::Eof => msg::TOK_EOF.into(),
     }
 }
 
@@ -243,7 +241,7 @@ fn ending_label(ending: Ending) -> &'static str {
         Ending::Conjunctive => "-고",
         Ending::Alternative => "-거나",
         Ending::Interrogative => "-ㄴ지",
-        Ending::Auxiliary => "보조 어미",
+        Ending::Auxiliary => msg::END_AUXILIARY,
         Ending::Negative => "-지",
         Ending::Quotative => "-라는",
     }
@@ -302,12 +300,7 @@ impl<'a> Parser<'a> {
         let (name, pos, ending) = match &token.tok {
             Tok::Verb { name, pos, ending } => (name.clone(), *pos, *ending),
             Tok::Copula { ending } => ("이다".to_string(), Pos::Descriptive, *ending),
-            other => {
-                return Err(Diag::syntax(
-                    format!("동사가 아님: {}", describe(other)),
-                    token.span,
-                ))
-            }
+            other => return Err(Diag::syntax(msg::not_a_verb(&describe(other)), token.span)),
         };
         self.at += 1;
         if name == "아니다" {
@@ -328,10 +321,10 @@ impl<'a> Parser<'a> {
                 ..
             } = &partner.tok
             else {
-                return Err(Diag::syntax("'-지' 다음이 '않다'가 아님", partner.span));
+                return Err(Diag::syntax(msg::NOT_NEGATION, partner.span));
             };
             if helper != "않다" {
-                return Err(Diag::syntax("'-지' 다음이 '않다'가 아님", partner.span));
+                return Err(Diag::syntax(msg::NOT_NEGATION, partner.span));
             }
             let after = *after;
             self.at += 1;
@@ -477,10 +470,7 @@ impl<'a> Parser<'a> {
                 };
                 return Ok((Expr::Passive(Box::new(call)), kept));
             }
-            return Err(Diag::syntax(
-                format!("관형형 다음이 '값'이 아님: '{head}'"),
-                span,
-            ));
+            return Err(Diag::syntax(msg::not_head_value(&head), span));
         }
         if tail.is_some() {
             self.at += 1;
@@ -587,10 +577,7 @@ impl<'a> Parser<'a> {
                 self.at += 1;
                 Ok(Expr::Name { name, span })
             }
-            other => Err(Diag::syntax(
-                format!("값이 아님: {}", describe(other)),
-                span,
-            )),
+            other => Err(Diag::syntax(msg::not_a_value(&describe(other)), span)),
         }
     }
 
@@ -601,10 +588,7 @@ impl<'a> Parser<'a> {
             if stop(&token.tok) || matches!(token.tok, Tok::Eof) {
                 if slots.len() != 1 {
                     let mark = crate::hangul::subject_particle(what);
-                    return Err(Diag::syntax(
-                        format!("{what}{mark} 하나가 아님"),
-                        token.span,
-                    ));
+                    return Err(Diag::syntax(msg::not_one(what, mark), token.span));
                 }
                 return Ok(slots.pop().expect("값 하나").expr);
             }
@@ -637,7 +621,10 @@ impl<'a> Parser<'a> {
             base_dir: self.base_dir,
             errors: Vec::new(),
         };
-        inner.reduce_until(|tok| matches!(tok, Tok::Newline | Tok::Eof), "끼워 넣은 값")
+        inner.reduce_until(
+            |tok| matches!(tok, Tok::Newline | Tok::Eof),
+            msg::WANT_EMBEDDED,
+        )
     }
 }
 
@@ -659,7 +646,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         Err(Diag::syntax(
-            format!("'{word}'가 아님: {}", describe(self.peek())),
+            msg::not_keyword(word, &describe(self.peek())),
             self.span(),
         ))
     }
@@ -670,14 +657,14 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         Err(Diag::syntax(
-            format!("'{wanted}'가 아님: {}", describe(self.peek())),
+            msg::not_keyword(wanted, &describe(self.peek())),
             self.span(),
         ))
     }
 
     fn end_of_statement(&mut self) -> Result<()> {
-        self.expect(&Tok::Symbol('.'), "문장을 닫는 마침표가")?;
-        self.expect(&Tok::Newline, "줄바꿈이")?;
+        self.expect(&Tok::Symbol('.'), msg::WANT_PERIOD)?;
+        self.expect(&Tok::Newline, msg::WANT_NEWLINE)?;
         Ok(())
     }
 
@@ -699,7 +686,7 @@ impl<'a> Parser<'a> {
             || self.keyword_at(0, "없음");
         if lone_value && matches!(self.ahead(1).tok, Tok::Newline) {
             let expr = self.primary()?;
-            self.expect(&Tok::Newline, "줄바꿈이")?;
+            self.expect(&Tok::Newline, msg::WANT_NEWLINE)?;
             return Ok(Stmt::Value {
                 expr,
                 span: token.span,
@@ -755,10 +742,7 @@ impl<'a> Parser<'a> {
         let Tok::Name(root) = self.tok_at(start) else {
             if let Tok::Keyword(word) = self.tok_at(start) {
                 if matches!(self.tok_at(start + 1), Tok::Particle { role: "topic", .. }) {
-                    return Err(Diag::syntax(
-                        format!("예약어에 값을 매길 수 없음: '{word}'"),
-                        self.ahead(0).span,
-                    ));
+                    return Err(Diag::syntax(msg::reserved_target(word), self.ahead(0).span));
                 }
             }
             return Ok(None);
@@ -803,7 +787,7 @@ impl<'a> Parser<'a> {
             ) {
                 self.at += 1;
                 if slots.len() != 1 {
-                    return Err(Diag::syntax("선언문의 값이 하나가 아님", token.span));
+                    return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
                 }
                 return Ok(slots.pop().expect("값 하나").expr);
             }
@@ -814,7 +798,7 @@ impl<'a> Parser<'a> {
                     Ending::AdnominalPast | Ending::AdnominalPres | Ending::Interrogative
                 ) {
                     return Err(Diag::syntax(
-                        format!("선언문에 쓸 수 없는 어미: {}", ending_label(info.ending)),
+                        msg::decl_bad_ending(ending_label(info.ending)),
                         info.span,
                     ));
                 }
@@ -824,7 +808,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if matches!(token.tok, Tok::Newline | Tok::Eof) {
-                return Err(Diag::syntax("선언문이 '이다'로 끝나지 않음", token.span));
+                return Err(Diag::syntax(msg::DECL_NO_COPULA, token.span));
             }
             let value = self.primary()?;
             self.push(&mut slots, value)?;
@@ -935,7 +919,7 @@ impl<'a> Parser<'a> {
                 Ending::Alternative => any = true,
                 other => {
                     return Err(Diag::syntax(
-                        format!("조건에 쓸 수 없는 어미: {}", ending_label(other)),
+                        msg::cond_bad_ending(ending_label(other)),
                         span,
                     ))
                 }
@@ -948,15 +932,12 @@ impl<'a> Parser<'a> {
         let (head, params) = self.definition_head()?;
         let (thing, thing_span) = self.expect_name()?;
         if thing != "것" {
-            return Err(Diag::syntax(format!("'것'이 아님: '{thing}'"), thing_span));
+            return Err(Diag::syntax(msg::not_thing(&thing), thing_span));
         }
         self.expect_particle()?;
         if !head.ends_with('다') {
             if params.len() != 1 || params[0].0 != Marker::Case("의") {
-                return Err(Diag::syntax(
-                    format!("파생 필드 '{head}'가 받는 구절이 '<소유자>의' 하나가 아님"),
-                    span,
-                ));
+                return Err(Diag::syntax(msg::noun_needs_owner(&head), span));
             }
             let owner = params[0].1.clone();
             let body = self.block()?;
@@ -994,7 +975,7 @@ impl<'a> Parser<'a> {
             }
             let Tok::Name(name) = &token.tok else {
                 return Err(Diag::syntax(
-                    format!("정의의 머리가 이름과 조사가 아님: {}", describe(&token.tok)),
+                    msg::head_not_phrase(&describe(&token.tok)),
                     token.span,
                 ));
             };
@@ -1002,7 +983,7 @@ impl<'a> Parser<'a> {
                 return Err(not_dictionary_form(token.span));
             };
             if self.at_symbol(2, ':') {
-                return Err(Diag::syntax("정의의 머리에 '라는 것은'이 없음", token.span));
+                return Err(Diag::syntax(msg::HEAD_NO_QUOTATIVE, token.span));
             }
             if self.tail_is_head(2) {
                 return Err(not_dictionary_form(token.span));
@@ -1012,10 +993,7 @@ impl<'a> Parser<'a> {
                 .iter()
                 .any(|(marker, _)| *marker == Marker::Case(canon))
             {
-                return Err(Diag::syntax(
-                    format!("정의에 조사 '{canon}'가 두 번 있음"),
-                    after.span,
-                ));
+                return Err(Diag::syntax(msg::head_twice(canon), after.span));
             }
             params.push((Marker::Case(canon), name.clone()));
             self.at += 2;
@@ -1053,7 +1031,7 @@ impl<'a> Parser<'a> {
                 Ok(name)
             }
             other => Err(Diag::syntax(
-                format!("가져올 이름이 아님: {}", describe(other)),
+                msg::not_import_name(&describe(other)),
                 self.span(),
             )),
         }
@@ -1076,7 +1054,7 @@ impl<'a> Parser<'a> {
         self.expect_verb_named("가져오다")?;
         self.end_of_statement()?;
         let Some(path) = resolve_module(&module, self.base_dir) else {
-            return Err(Diag::syntax(format!("모듈 파일이 없음: {module}.sr"), span));
+            return Err(Diag::syntax(msg::module_missing(&module), span));
         };
         Ok(Stmt::Import {
             module,
@@ -1097,7 +1075,7 @@ impl<'a> Parser<'a> {
                     self.at += 1;
                 }
                 let Some(last) = slots.last_mut() else {
-                    return Err(Diag::syntax("'간격' 앞에 수가 없음", token.span));
+                    return Err(Diag::syntax(msg::NO_STEP_NUMBER, token.span));
                 };
                 last.marker = Marker::Step;
                 continue;
@@ -1106,7 +1084,7 @@ impl<'a> Parser<'a> {
                 self.at += 1;
                 self.expect_verb_named("반복하다")?;
                 if slots.len() != 1 {
-                    return Err(Diag::syntax("'동안' 앞의 조건이 하나가 아님", token.span));
+                    return Err(Diag::syntax(msg::WHILE_NOT_ONE, token.span));
                 }
                 let test = slots.pop().expect("조건").expr;
                 let body = self.block()?;
@@ -1138,7 +1116,7 @@ impl<'a> Parser<'a> {
                     "돌려주다" => {
                         self.end_of_statement()?;
                         if slots.len() != 1 {
-                            return Err(Diag::syntax("돌려줄 값이 하나가 아님", info.span));
+                            return Err(Diag::syntax(msg::RETURN_NOT_ONE, info.span));
                         }
                         return Ok(Stmt::Return {
                             value: slots.pop().expect("값").expr,
@@ -1171,12 +1149,12 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Ending::Conditional => {
-                    return Err(Diag::syntax("실행문에 쓸 수 없는 어미: -면", info.span)
-                        .with_hint("조건문은 '만약'으로 시작합니다"))
+                    return Err(Diag::syntax(msg::EXEC_CONDITIONAL, info.span)
+                        .with_hint(msg::EXEC_CONDITIONAL_HELP))
                 }
                 other => {
                     return Err(Diag::syntax(
-                        format!("실행문에 쓸 수 없는 어미: {}", ending_label(other)),
+                        msg::exec_bad_ending(ending_label(other)),
                         info.span,
                     ))
                 }
@@ -1193,7 +1171,7 @@ impl<'a> Parser<'a> {
                 Marker::Step => step = Some(slot.expr),
                 Marker::Case("마다") => {
                     let Some(name) = slot.expr.as_name() else {
-                        return Err(Diag::syntax("'마다' 앞이 이름이 아님", slot.expr.span()));
+                        return Err(Diag::syntax(msg::EACH_NOT_NAME, slot.expr.span()));
                     };
                     variable = Some(name.to_string());
                 }
@@ -1201,10 +1179,10 @@ impl<'a> Parser<'a> {
             }
         }
         let Some(variable) = variable else {
-            return Err(Diag::syntax("반복문에 '마다'가 없음", span));
+            return Err(Diag::syntax(msg::LOOP_NO_EACH, span));
         };
         let (Some(start), Some(stop)) = (start, stop) else {
-            return Err(Diag::syntax("반복문에 범위가 없음", span));
+            return Err(Diag::syntax(msg::LOOP_NO_RANGE, span));
         };
         let body = self.block()?;
         Ok(Stmt::Loop {
@@ -1221,6 +1199,5 @@ impl<'a> Parser<'a> {
 }
 
 fn not_dictionary_form(span: Span) -> Diag {
-    Diag::syntax("정의의 머리가 사전형이 아님", span)
-        .with_hint("'<구절>* <사전형>라는 것은:' 꼴로 적습니다")
+    Diag::syntax(msg::HEAD_NOT_DICT, span).with_hint(msg::HEAD_NOT_DICT_HELP)
 }

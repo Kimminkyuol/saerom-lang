@@ -1,19 +1,13 @@
+use saeromc::{msg, report};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-
-const USAGE: &str = "\
-새롬
-
-  saeromc <파일.sr> [-o <출력>]
-  saeromc --emit-llvm <파일.sr>
-";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(Fault::Usage) => {
-            eprint!("{USAGE}");
+            eprint!("{}", msg::USAGE);
             ExitCode::from(2)
         }
         Err(Fault::Message(text)) => {
@@ -21,6 +15,11 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// 자리 없는 명령줄 오류를 `오류: ...` 한 줄로 꾸민다.
+fn complain(message: &str) -> String {
+    report::plain(msg::ERROR, message)
 }
 
 enum Fault {
@@ -65,7 +64,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let path = source_path.ok_or(Fault::Usage)?;
 
     let source = std::fs::read_to_string(path)
-        .map_err(|error| format!("파일을 읽을 수 없음: {path} ({error})\n"))?;
+        .map_err(|error| complain(&msg::source_unreadable(path, &error.to_string())))?;
     let base_dir = Path::new(path).parent();
     if only_tokens {
         let found = saeromc::tokens(&source, base_dir)
@@ -111,11 +110,15 @@ fn run(args: &[String]) -> Result<(), Fault> {
 }
 
 fn render(found: &[saeromc::diag::Diag], source: &str, path: &str) -> String {
-    found
-        .iter()
-        .map(|diag| diag.render(source, path))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let shown: Vec<String> = found.iter().map(|diag| diag.render(source, path)).collect();
+    summarize(shown.join("\n"), found.len())
+}
+
+fn summarize(mut out: String, count: usize) -> String {
+    if count > 1 {
+        out.push_str(&report::plain(msg::ERROR, &msg::aborting(count)));
+    }
+    out
 }
 
 fn target_triple() -> String {
@@ -130,8 +133,12 @@ fn target_triple() -> String {
 
 fn link(ir: &str, output: &Path, tuning: Option<&str>) -> Result<(), String> {
     let ir_path = output.with_extension("ll");
-    std::fs::write(&ir_path, ir)
-        .map_err(|error| format!("{}를 쓸 수 없음: {error}\n", ir_path.display()))?;
+    std::fs::write(&ir_path, ir).map_err(|error| {
+        complain(&msg::write_failed(
+            &ir_path.display().to_string(),
+            &error.to_string(),
+        ))
+    })?;
     let runtime = runtime_archive()?;
     let mut clang = Command::new("clang");
     if let Some(tuning) = tuning {
@@ -143,15 +150,14 @@ fn link(ir: &str, output: &Path, tuning: Option<&str>) -> Result<(), String> {
         .arg("-o")
         .arg(output)
         .output()
-        .map_err(|error| format!("clang을 부를 수 없음: {error}\n"))?;
+        .map_err(|error| complain(&msg::clang_missing(&error.to_string())))?;
     let _ = std::fs::remove_file(&ir_path);
     if done.status.success() {
         return Ok(());
     }
-    Err(format!(
-        "링크 실패\n{}",
-        String::from_utf8_lossy(&done.stderr)
-    ))
+    Err(complain(&msg::link_failed(&String::from_utf8_lossy(
+        &done.stderr,
+    ))))
 }
 
 fn runtime_archive() -> Result<PathBuf, String> {
@@ -173,9 +179,5 @@ fn runtime_archive() -> Result<PathBuf, String> {
         .iter()
         .map(|path| format!("  {}", path.display()))
         .collect();
-    Err(format!(
-        "런타임 {NAME} 을 찾을 수 없음. 찾아본 자리:\n{}\n\
-         컴파일러 옆에 두거나 SAEROM_RT 로 자리를 알려 주세요.\n",
-        shown.join("\n")
-    ))
+    Err(complain(&msg::runtime_missing(NAME, &shown.join("\n"))))
 }

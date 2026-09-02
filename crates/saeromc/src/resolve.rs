@@ -4,6 +4,7 @@ use crate::diag::{suggest, Diag, Span};
 use crate::hir::*;
 use crate::intern::Interner;
 use crate::load::{Loaded, UnitId};
+use crate::msg;
 use crate::sig::Marker;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -155,7 +156,7 @@ fn shown(markers: &[Marker]) -> String {
         .map(|m| m.label())
         .collect();
     if used.is_empty() {
-        "없음".to_string()
+        msg::NO_PARTICLE.to_string()
     } else {
         used.join(", ")
     }
@@ -246,9 +247,9 @@ impl<'a> Resolver<'a> {
                     .chain(self.tables[target].globals.keys().map(String::as_str))
                     .collect();
                 let close = suggest(name, known).map(str::to_string);
-                let mut error = Diag::name(format!("모듈 '{module}'에 '{name}' 없음"), span);
+                let mut error = Diag::name(msg::module_lacks(module, name), span);
                 if let Some(close) = close {
-                    error = error.with_hint(format!("비슷한 이름: '{close}'"));
+                    error = error.with_hint(msg::similar(&close));
                 }
                 self.note(unit, error);
             }
@@ -552,9 +553,9 @@ impl<'a> Resolver<'a> {
             .collect();
         known.extend(frame.locals.keys().map(String::as_str));
         let close = suggest(name, known).map(str::to_string);
-        let mut error = Diag::name(format!("'{name}' 정의되지 않음"), span);
+        let mut error = Diag::name(msg::undefined(name), span);
         if let Some(close) = close {
-            error = error.with_hint(format!("비슷한 이름: '{close}'"));
+            error = error.with_hint(msg::similar(&close));
         }
         self.note(frame.unit, error);
         Expr::Nothing
@@ -633,9 +634,9 @@ impl<'a> Resolver<'a> {
                         .collect::<Vec<_>>(),
                 )
                 .map(str::to_string);
-                let mut error = Diag::name(format!("모듈 '{module}'에 '{name}' 없음"), span);
+                let mut error = Diag::name(msg::module_lacks(module, name), span);
                 if let Some(close) = close {
-                    error = error.with_hint(format!("비슷한 이름: '{close}'"));
+                    error = error.with_hint(msg::similar(&close));
                 }
                 self.note(frame.unit, error);
                 return Expr::Nothing;
@@ -693,7 +694,7 @@ impl<'a> Resolver<'a> {
                 None => {
                     self.note(
                         frame.unit,
-                        Diag::name(format!("모듈 '{name}' 가져오지 않음"), call.span),
+                        Diag::name(msg::module_not_taken(name), call.span),
                     );
                     return Expr::Nothing;
                 }
@@ -881,19 +882,19 @@ impl<'a> Resolver<'a> {
                 known.extend(builtins::table().iter().map(|def| def.verb));
             }
             let close = suggest(verb, known).map(str::to_string);
-            let mut error = Diag::name(format!("동사 '{verb}' 정의되지 않음"), span);
+            let mut error = Diag::name(msg::verb_undefined(verb), span);
             if let Some(close) = close {
-                error = error.with_hint(format!("비슷한 이름: '{close}'"));
+                error = error.with_hint(msg::similar(&close));
             }
             return self.note(unit, error);
         }
         let listed: Vec<String> = ways.iter().map(|way| describe(verb, way)).collect();
         let error = Diag::new(
-            "조사 오류",
-            format!("'{verb}'를 조사 {}로 부를 수 없음", shown(used)),
+            msg::PARTICLE,
+            msg::wrong_particles(verb, &shown(used)),
             span,
         )
-        .with_hint(format!("조사: {}", listed.join(" / ")));
+        .with_hint(msg::ways(&listed.join(" / ")));
         self.note(unit, error);
     }
 }

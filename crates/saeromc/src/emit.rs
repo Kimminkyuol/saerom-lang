@@ -188,7 +188,7 @@ declare void @sr_close(ptr)
 declare void @sr_stop(ptr)
 declare void @sr_clone(ptr, ptr)
 declare void @sr_finish()
-declare void @sr_sources(ptr, i64)
+declare void @sr_sources(ptr, i64, i8)
 @SR_POS = external global i64
 @SR_FRAMES = external global [1024 x ptr]
 @SR_AT = external global [1024 x i64]
@@ -1444,6 +1444,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn finish(&mut self, triple: &str) -> String {
+        let traced = self.frames as u8;
         let mut table = Vec::new();
         for id in 0..self.program.modules.len() {
             let module = &self.program.modules[id];
@@ -1478,7 +1479,10 @@ impl<'a> Emitter<'a> {
         out.push('\n');
         out.push_str(&self.functions);
         let _ = writeln!(out, "define i32 @main() {{\nentry:");
-        let _ = writeln!(out, "  call void @sr_sources(ptr @sources, i64 {count})");
+        let _ = writeln!(
+            out,
+            "  call void @sr_sources(ptr @sources, i64 {count}, i8 {traced})"
+        );
         for id in &self.program.order {
             let _ = writeln!(out, "  call void @mod_{id}()");
         }
