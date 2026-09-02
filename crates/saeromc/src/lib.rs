@@ -8,18 +8,14 @@ pub mod hir;
 pub mod intern;
 pub mod lex;
 pub mod load;
-pub mod msg {
-    include!("../../../shared/messages.rs");
-}
 pub mod parse;
 pub mod prescan;
-pub mod report {
-    include!("../../../shared/report.rs");
-}
 pub mod resolve;
 pub mod sig;
 pub mod types;
 pub mod words;
+
+pub use saerom_msg::{msg, report};
 
 use diag::Diag;
 use std::path::Path;

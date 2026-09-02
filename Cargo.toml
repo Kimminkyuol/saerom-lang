@@ -1,8 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/saeromc", "crates/saerom-rt"]
+members = ["crates/saeromc", "crates/saerom-rt", "crates/saerom-msg"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+
+[workspace.dependencies]
+saerom-msg = { path = "crates/saerom-msg" }
+
+# 산출물에 정적 링크되는 런타임이라 크기가 곧 사용자 실행파일 크기다.
+[profile.release]
+lto = true
+codegen-units = 1

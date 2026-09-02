@@ -12,3 +12,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "saeromc"
 path = "src/main.rs"
+
+[dependencies]
+saerom-msg.workspace = true

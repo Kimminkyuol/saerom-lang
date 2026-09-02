@@ -1,0 +1,6 @@
+[package]
+name = "saerom-msg"
+description = "새롬이 사람에게 보이는 글과 그 꼴"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

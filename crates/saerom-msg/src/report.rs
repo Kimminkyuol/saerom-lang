@@ -86,7 +86,9 @@ fn tint(code: &str, text: &str) -> String {
 fn colored() -> bool {
     use std::io::IsTerminal;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal())
+    *ON.get_or_init(|| {
+        std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+    })
 }
 
 fn width(ch: char) -> usize {

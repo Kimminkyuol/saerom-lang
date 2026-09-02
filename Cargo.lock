@@ -3,9 +3,19 @@
 version = 4
 
 [[package]]
+name = "saerom-msg"
+version = "0.1.0"
+
+[[package]]
 name = "saerom-rt"
 version = "0.1.0"
+dependencies = [
+ "saerom-msg",
+]
 
 [[package]]
 name = "saeromc"
 version = "0.1.0"
+dependencies = [
+ "saerom-msg",
+]
