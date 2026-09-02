@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 15-입력은 넣는 값에 따라, 16-종료는 일부러 죽으므로 여기서 돌리지 않는다.
 const SKIP: &[&str] = &["14-입력", "15-종료"];
 
 fn fixtures() -> Vec<PathBuf> {

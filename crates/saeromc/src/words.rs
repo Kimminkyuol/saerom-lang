@@ -80,7 +80,6 @@ pub const DOEDA_FORMS: &[(&str, Ending)] = &[
     ("된", Ending::AdnominalPast),
 ];
 
-/// `다`, `면` 넣지 말 것
 pub const COPULA: &[(&str, Ending)] = &[
     ("이거나", Ending::Alternative),
     ("이라는", Ending::Quotative),
@@ -92,7 +91,6 @@ pub const COPULA: &[(&str, Ending)] = &[
     ("인", Ending::AdnominalPast),
 ];
 
-/// `초` + `과` 방지
 pub const COMPARATIVES: &[(&str, &str, bool)] = &[
     ("이상", "작다", true),
     ("이하", "크다", true),
@@ -245,7 +243,6 @@ pub fn stem_forms<'a>(stems: impl IntoIterator<Item = &'a String>) -> FormTable 
     table
 }
 
-/// `이라는`, `라는`
 pub fn copula_suffix(
     chunk: &str,
     known: &dyn Fn(&str) -> bool,

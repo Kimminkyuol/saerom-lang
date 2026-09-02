@@ -27,8 +27,6 @@ pub struct Source {
     text_len: usize,
 }
 
-/// 컴파일된 코드가 실패할 수 있는 연산 앞에서 직접 써 넣는다.
-/// 모듈(16) | 줄(24) | 칸(12) | 너비(12)
 #[no_mangle]
 pub static mut SR_POS: u64 = 0;
 
@@ -240,7 +238,7 @@ fn deep_copy(found: &Value) -> Value {
 
 fn at_index(found: &Value, index: usize, field: &str, size: usize) -> Value {
     if index >= size {
-        fail("값 오류", format!("'{field}' 없음. 개수는 {size}"))
+        fail("값 오류", format!("'{field}'에 접근할 수 없음 (크기: {size})"))
     }
     match found.tag {
         LIST => found.as_list().borrow()[index],
@@ -302,11 +300,11 @@ pub unsafe extern "C" fn sr_field_get(
         }
     }
     if owner.tag == DICT {
-        fail("이름 오류", format!("사전에 '{field}' 없음"));
+        fail("이름 오류", format!("'{field}' 접근할 수 없음"));
     }
     fail(
         "이름 오류",
-        format!("{}에 필드 '{field}' 없음", owner.kind()),
+        format!("{}에 '{field}' 접근할 수 없음", owner.kind()),
     );
 }
 
@@ -344,7 +342,7 @@ pub unsafe extern "C" fn sr_index(out: *mut Value, owner: *const Value, place: *
     };
     let index = place.as_int();
     if index < 1 || index as usize > size {
-        fail("값 오류", format!("{index}번째 없음. 개수는 {size}"));
+        fail("값 오류", format!("{index}번째 없음 (크기: {size})"));
     }
     *out = at_index(owner, index as usize - 1, "자리", size);
 }
@@ -470,7 +468,7 @@ fn order(verb: &str, left: &Value, right: &Value) -> std::cmp::Ordering {
     fail(
         "값 오류",
         format!(
-            "'{verb}'로 견줄 수 없음: {} {}, {} {}",
+            "'{verb}'로 비교할 수 없음: {} {}, {} {}",
             left.kind(),
             show(left),
             right.kind(),
@@ -546,12 +544,12 @@ pub unsafe extern "C" fn sr_check_bool(found: *const Value, bytes: *const u8, le
     if found.tag != BOOL {
         let name = name_of(bytes, len);
         if found.tag == NOTHING {
-            fail("값 오류", format!("'{name}' 아무 값도 돌려주지 않음"));
+            fail("값 오류", format!("'{name}' 돌려주는 값이 없음"));
         } else {
             fail(
                 "값 오류",
                 format!(
-                    "'{name}' 낸 값이 논리값이 아님: {} {}",
+                    "'{name}'의 값이 논리값이 아님: {} {}",
                     found.kind(),
                     show(found)
                 ),
@@ -565,7 +563,7 @@ pub unsafe extern "C" fn sr_check_value(found: *const Value, bytes: *const u8, l
     if at(found).tag == NOTHING {
         fail(
             "값 오류",
-            format!("'{}' 아무 값도 돌려주지 않음", name_of(bytes, len)),
+            format!("'{}' 돌려주는 값이 없음", name_of(bytes, len)),
         );
     }
 }
@@ -630,7 +628,6 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// 생성된 main 은 Rust 의 뒷정리를 거치지 않는다. 끝내기 전에 손수 비운다.
 #[no_mangle]
 pub extern "C" fn sr_finish() {
     let _ = std::io::stdout().flush();
@@ -650,8 +647,8 @@ pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *cons
     match mode.as_str() {
         "읽기" => open.read(true),
         "쓰기" => open.write(true).create(true).truncate(true),
-        "덧쓰기" => open.append(true).create(true),
-        _ => fail("값 오류", format!("모르는 여는 방식: '{mode}'")),
+        "추가" => open.append(true).create(true),
+        _ => fail("값 오류", format!("정의되지 않은 방식: '{mode}'")),
     };
     let found = open.open(std::ffi::OsStr::from_bytes(name.as_bytes()));
     *out = match found {

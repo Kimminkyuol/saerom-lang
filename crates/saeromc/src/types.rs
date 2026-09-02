@@ -124,7 +124,6 @@ impl Types {
         }
     }
 
-    /// `~를 정수로 바꾼다` 의 '정수'는 한 번만 매겨지는 전역이라 값을 안다.
     fn converted(&self, function: Option<FuncId>, args: &[Expr]) -> Ty {
         let kind = match args.get(1) {
             Some(Expr::Str(text)) => Some(text.clone()),
@@ -203,7 +202,6 @@ pub fn infer(program: &Program) -> Types {
     types
 }
 
-/// 딱 한 번, 글 리터럴로만 매겨지는 전역. `정수`·`실수` 같은 자료형 이름이다.
 fn constants_of(program: &Program) -> Vec<Option<Rc<str>>> {
     let mut found: Vec<Option<Rc<str>>> = vec![None; program.globals as usize];
     let mut counts = vec![0usize; program.globals as usize];
@@ -362,7 +360,6 @@ fn assign(
     }
 }
 
-/// 호출 자리의 인자 타입을 불리는 쪽 매개변수로 흘려보낸다.
 fn visit(
     types: &mut Types,
     program: &Program,
@@ -420,7 +417,6 @@ fn visit(
     }
 }
 
-/// 몸이 반드시 값을 돌려주고 끝나는가. 아니면 '없음'이 새어 나올 수 있다.
 pub fn always_returns(body: &[Stmt]) -> bool {
     let Some(last) = body.last() else {
         return false;

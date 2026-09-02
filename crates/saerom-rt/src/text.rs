@@ -37,7 +37,7 @@ fn float_text(found: f64) -> String {
         return if found > 0.0 { "무한" } else { "-무한" }.to_string();
     }
     if found.is_nan() {
-        return "수아님".to_string();
+        return "수가 아님".to_string();
     }
     if found == found.trunc() && found.abs() < 9.2e18 {
         return format!("{}", found as i64);
@@ -45,7 +45,6 @@ fn float_text(found: f64) -> String {
     significant(found, 12)
 }
 
-/// C 의 %g 와 같은 꼴. 유효숫자를 정해 두고 꼬리의 0을 지운다.
 fn significant(found: f64, digits: usize) -> String {
     let exponent = found.abs().log10().floor() as i32;
     if exponent < -4 || exponent >= digits as i32 {

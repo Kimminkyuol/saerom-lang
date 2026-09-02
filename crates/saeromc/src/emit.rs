@@ -278,7 +278,6 @@ impl<'a> Emitter<'a> {
         name
     }
 
-    /// 스칼라 값을 %Value 칸에 담는다. 태그와 비트를 바로 적는다.
     fn boxed(&mut self, val: Val) -> String {
         if val.repr == Repr::Boxed {
             return val.name;
@@ -305,7 +304,6 @@ impl<'a> Emitter<'a> {
         holder
     }
 
-    /// %Value 칸에서 비트를 꺼낸다. 타입이 이미 확정된 자리에서만 부른다.
     fn unboxed(&mut self, val: Val, want: Repr) -> String {
         if val.repr == want {
             return val.name;
@@ -358,7 +356,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// 참·거짓 판정. 논리값이나 정수면 런타임을 부르지 않는다.
     fn truth(&mut self, val: Val) -> String {
         match val.repr {
             Repr::Flag => val.name,
@@ -677,8 +674,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// 임자의 타입이 사전·목록·문자열이 아니라고 확정되면 파생 필드는 그 함수뿐이다.
-    /// 이름으로 찾아 들어가지 않고 바로 부른다.
     fn direct_noun(
         &mut self,
         owner: &'a Expr,
@@ -768,7 +763,6 @@ impl<'a> Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    /// 두 인자 타입이 확정된 산술·견줌은 런타임을 부르지 않고 바로 낸다.
     fn inline_op(&mut self, op: Builtin, args: &'a [Expr]) -> Option<Val> {
         if args.len() != 2 {
             if op == Builtin::Truthy && args.len() == 1 && self.type_of(&args[0]) == Ty::Bool {
@@ -939,7 +933,6 @@ impl<'a> Emitter<'a> {
         made
     }
 
-    /// 술어는 논리값을, 파생 필드는 값을 내야 한다. 타입이 이미 그렇다면 검사를 뺀다.
     fn guard_result(&mut self, func: FuncId, made: &Val, span: Span) {
         let kind = self.program.functions[func as usize].kind;
         let ty = self.types.returns[func as usize];
@@ -1154,7 +1147,6 @@ impl<'a> Emitter<'a> {
         self.mark(&end);
     }
 
-    /// 정수 범위는 목록을 만들지 않고 셈 고리로 돈다.
     fn counted(
         &mut self,
         place: Place,

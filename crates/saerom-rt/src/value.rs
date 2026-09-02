@@ -112,7 +112,6 @@ impl Value {
         }
     }
 
-    /// '자료형' 필드가 내는 이름. 오류에 쓰는 kind 와 달리 정수와 실수를 가른다.
     pub fn type_name(&self) -> &'static str {
         match self.tag {
             BOOL => "논리값",
@@ -139,7 +138,6 @@ impl Value {
     }
 }
 
-/// ponytail: 힙 객체를 놓아주지 않는다. 참조 세기는 M4 뒤에 넣는다.
 fn leak<T>(found: T) -> u64 {
     Box::into_raw(Box::new(found)) as u64
 }
