@@ -17,7 +17,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// 자리 없는 명령줄 오류를 `오류: ...` 한 줄로 꾸민다.
 fn complain(message: &str) -> String {
     report::plain(msg::ERROR, message)
 }
@@ -131,8 +130,6 @@ fn target_triple() -> String {
         .unwrap_or_default()
 }
 
-/// 런타임은 러스트 std 전부를 안고 오므로, 안 쓰는 조각과 심볼표를 링크에서 덜어낸다.
-/// 역추적은 SR_FRAMES 표로 찍으니 DWARF 를 버려도 그대로 나온다.
 #[cfg(target_os = "macos")]
 const TRIM: &[&str] = &["-Wl,-dead_strip", "-Wl,-x", "-Wl,-S"];
 #[cfg(not(target_os = "macos"))]

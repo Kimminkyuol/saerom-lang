@@ -141,7 +141,7 @@ pub const BUILTIN_VERBS: &[Builtin] = &[
     verb("쓰다", "쓰"),
     verb("가져오다", "가져오"),
     verb("넘어가다", "넘어가"),
-    verb("돌려주다", "돌려주"),
+    verb("반환하다", "반환하"),
     Builtin {
         name: "잇다",
         stem: "잇",

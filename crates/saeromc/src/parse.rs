@@ -1113,7 +1113,7 @@ impl<'a> Parser<'a> {
                             Stmt::Continue { span }
                         });
                     }
-                    "돌려주다" => {
+                    "반환하다" => {
                         self.end_of_statement()?;
                         if slots.len() != 1 {
                             return Err(Diag::syntax(msg::RETURN_NOT_ONE, info.span));

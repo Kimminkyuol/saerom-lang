@@ -53,7 +53,7 @@ pub const HEAD_NOT_DICT: &str = "정의 서술어 형태가 사전형이 아님"
 pub const HEAD_NOT_DICT_HELP: &str = "'<구문>* <사전형>라는 것은:' 형식 준수 필요";
 pub const NO_STEP_NUMBER: &str = "'<구문>간격' 형식 준수 필요";
 pub const WHILE_NOT_ONE: &str = "'동안' 절의 표현식이 단일하지 않음";
-pub const RETURN_NOT_ONE: &str = "돌려줄 값이 단일하지 않음";
+pub const RETURN_NOT_ONE: &str = "반환할 값이 단일하지 않음";
 pub const EXEC_CONDITIONAL: &str = "실행문에 쓸 수 없는 어미: -면";
 pub const EXEC_CONDITIONAL_HELP: &str = "조건문은 '만약'으로 시작해야 함";
 pub const EACH_NOT_NAME: &str = "'마다'의 수식 대상이 식별자가 아님";
@@ -246,7 +246,7 @@ pub fn unknown_kind(kind: &str) -> String {
 }
 
 pub fn no_return(name: &str) -> String {
-    format!("'{name}' 돌려주는 값이 없음")
+    format!("'{name}' 반환하는 값이 없음")
 }
 
 pub fn not_bool(name: &str, kind: &str, shown: &str) -> String {

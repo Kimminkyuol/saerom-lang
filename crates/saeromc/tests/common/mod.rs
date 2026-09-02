@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-// 골든 견주기. `tests/`는 저장소에 없으므로 (gitignore) 골든이 없으면
-// 첫 실행 때 지금 결과를 적어 둔다. SAEROM_BLESS=1 이면 있어도 다시 적는다.
-
 use std::path::{Path, PathBuf};
 
 pub fn root() -> PathBuf {
@@ -30,7 +27,6 @@ pub fn stem(path: &Path) -> String {
         .into_owned()
 }
 
-/// `tests/<kind>/<stem>.<ext>` 와 견준다.
 pub fn check(kind: &str, ext: &str, stem: &str, made: &str) {
     let golden = root()
         .join("tests")

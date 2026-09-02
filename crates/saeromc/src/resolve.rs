@@ -202,6 +202,17 @@ impl<'a> Resolver<'a> {
         for name in bound {
             global_slot(&name, &mut self.tables[unit], &mut self.globals);
         }
+
+        for statement in statements {
+            if let ASt::Import {
+                names: None, path, ..
+            } = statement
+            {
+                if let Some(target) = loaded.unit_of(path) {
+                    self.take_globals(unit, target);
+                }
+            }
+        }
     }
 
     fn import(
@@ -217,6 +228,7 @@ impl<'a> Resolver<'a> {
         };
         let Some(names) = names else {
             self.tables[unit].modules.insert(module.to_string(), target);
+            self.take_definitions(unit, target);
             return;
         };
         for name in names {
@@ -253,6 +265,37 @@ impl<'a> Resolver<'a> {
                 }
                 self.note(unit, error);
             }
+        }
+    }
+
+    
+    fn take_definitions(&mut self, unit: UnitId, target: UnitId) {
+        let verbs: Vec<Verb> = self.tables[target]
+            .verbs
+            .iter()
+            .map(|found| Verb {
+                name: found.name.clone(),
+                params: found.params.clone(),
+                func: found.func,
+            })
+            .collect();
+        let nouns: Vec<(String, FuncId)> = self.tables[target]
+            .nouns
+            .iter()
+            .map(|(name, &func)| (name.clone(), func))
+            .collect();
+        self.tables[unit].verbs.extend(verbs);
+        self.tables[unit].nouns.extend(nouns);
+    }
+
+    fn take_globals(&mut self, unit: UnitId, target: UnitId) {
+        let globals: Vec<(String, GlobalId)> = self.tables[target]
+            .globals
+            .iter()
+            .map(|(name, &slot)| (name.clone(), slot))
+            .collect();
+        for (name, slot) in globals {
+            self.tables[unit].globals.entry(name).or_insert(slot);
         }
     }
 
