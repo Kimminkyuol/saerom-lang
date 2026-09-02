@@ -14,8 +14,8 @@ saeromc --emit-llvm <파일.sr>
 ## 빌드
 
 ```
-make          컴파일러와 런타임을 짓는다
-make test     골든 검사
+make
+make test
 ```
 
 ## 라이선스
