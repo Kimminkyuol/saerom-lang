@@ -47,6 +47,8 @@ pub fn not_number(raw: &str) -> String {
 pub const NO_BLOCK: &str = "구문 블록의 들여쓰기 누락";
 pub const NOT_NEGATION: &str = "'-지'에 대응하는 '않다' 누락";
 pub const DECL_NOT_ONE: &str = "선언문에 지정된 표현식이 단일 값이 아님";
+pub const REMOVE_NEEDS_FIELD: &str = "'제거하다'의 대상이 자리나 명칭이 아님";
+pub const TABLE_NO_END: &str = "묶음 항목이 '묶음'으로 끝나지 않음";
 pub const DECL_NO_COPULA: &str = "선언문에서 '이다' 누락";
 pub const HEAD_NO_QUOTATIVE: &str = "정의에서 '라는 것은' 누락";
 pub const HEAD_NOT_DICT: &str = "정의 서술어 형태가 사전형이 아님";
@@ -61,6 +63,7 @@ pub const LOOP_NO_EACH: &str = "반복문에 '마다' 누락";
 pub const LOOP_NO_RANGE: &str = "반복문 범위 누락";
 
 pub const WANT_COLON: &str = "':'이";
+pub const WANT_COPULA: &str = "묶음을 닫는 '이다'가";
 pub const WANT_NEWLINE: &str = "줄바꿈이";
 pub const WANT_PERIOD: &str = "'.'이";
 pub const WANT_EMBEDDED: &str = "삽입된 표현식";
@@ -209,16 +212,16 @@ pub fn arg_not_number(verb: &str, kind: &str, shown: &str) -> String {
     format!("'{verb}'의 인자가 수가 아님: {kind} {shown}")
 }
 
+pub fn not_table(verb: &str, kind: &str) -> String {
+    format!("'{verb}'의 대상이 묶음이 아님: {kind}")
+}
+
 pub fn no_field(field: &str) -> String {
     format!("'{field}' 접근할 수 없음")
 }
 
 pub fn no_field_on(kind: &str, field: &str) -> String {
     format!("{kind}에 '{field}' 접근할 수 없음")
-}
-
-pub fn empty_at(field: &str, size: usize) -> String {
-    format!("'{field}'에 접근할 수 없음 (크기: {size})")
 }
 
 pub fn place_not_int(shown: &str) -> String {

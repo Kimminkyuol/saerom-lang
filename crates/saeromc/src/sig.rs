@@ -92,6 +92,8 @@ impl Signatures {
 
 const BUILTIN: &[(&str, &[Marker])] = &[
     ("출력하다", &[Marker::Case("를")]),
+    ("추가하다", &[Marker::Case("에"), Marker::Case("를")]),
+    ("제거하다", &[Marker::Case("를")]),
     ("종료하다", &[Marker::Case("로")]),
     ("복사하다", &[Marker::Case("를")]),
     ("바꾸다", &[Marker::Case("를"), Marker::Case("로")]),

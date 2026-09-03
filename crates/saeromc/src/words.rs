@@ -46,6 +46,8 @@ pub fn particles_by_length() -> Vec<(String, &'static str, &'static str)> {
 
 pub const STRUCTURAL: &[&str] = &["마다", "부터", "까지", "간격", "모듈"];
 
+pub const FIELDS: &[&str] = &["자료형", "길이", "명칭"];
+
 pub const KEYWORDS: &[&str] = &[
     "만약",
     "아니고",
@@ -54,8 +56,7 @@ pub const KEYWORDS: &[&str] = &[
     "참",
     "거짓",
     "없음",
-    "목록",
-    "사전",
+    "묶음",
     "간격",
 ];
 
@@ -129,6 +130,8 @@ const fn verb(name: &'static str, stem: &'static str) -> Builtin {
 
 pub const BUILTIN_VERBS: &[Builtin] = &[
     verb("출력하다", "출력하"),
+    verb("추가하다", "추가하"),
+    verb("제거하다", "제거하"),
     verb("바꾸다", "바꾸"),
     verb("더하다", "더하"),
     verb("빼다", "빼"),

@@ -7,7 +7,8 @@ use std::fmt::Write;
 
 pub fn emit(program: &Program, triple: &str, frames: bool) -> Result<String, Vec<Diag>> {
     let types = infer(program);
-    let mut emitter = Emitter::new(program, types);
+    let reuse = crate::reuse::find(program, &types);
+    let mut emitter = Emitter::new(program, types, reuse);
     emitter.frames = frames;
     emitter.run();
     if !emitter.errors.is_empty() {
@@ -78,6 +79,7 @@ struct Val {
 struct Emitter<'a> {
     program: &'a Program,
     types: Types,
+    reuse: crate::reuse::Reuse,
     strings: HashMap<String, String>,
     constants: String,
     functions: String,
@@ -127,7 +129,21 @@ fn operation(op: Builtin) -> Op {
         Builtin::Write => value("sr_write", 2),
         Builtin::Convert => value("sr_convert", 2),
         Builtin::Add => value("sr_add", 2),
-        Builtin::AddCopy => value("sr_add_copy", 2),
+        Builtin::Push => Op {
+            symbol: "sr_push",
+            arity: 2,
+            returns: false,
+        },
+        Builtin::RemoveAt => Op {
+            symbol: "sr_remove_at",
+            arity: 2,
+            returns: false,
+        },
+        Builtin::RemoveKey => Op {
+            symbol: "sr_remove_key",
+            arity: 2,
+            returns: false,
+        },
         Builtin::Sub => value("sr_sub", 2),
         Builtin::Mul => value("sr_mul", 2),
         Builtin::Div => value("sr_div", 2),
@@ -155,12 +171,14 @@ declare void @sr_str(ptr, ptr, i64)
 declare void @sr_copy(ptr, ptr)
 declare i8 @sr_truthy(ptr)
 declare void @sr_truthy_value(ptr, ptr)
-declare void @sr_list_new(ptr)
-declare void @sr_list_push(ptr, ptr)
-declare i64 @sr_list_len(ptr)
-declare void @sr_list_get(ptr, ptr, i64)
-declare void @sr_dict_new(ptr)
-declare void @sr_dict_put(ptr, ptr, i64, ptr)
+declare void @sr_table_new(ptr)
+declare void @sr_table_push(ptr, ptr)
+declare i64 @sr_table_len(ptr)
+declare void @sr_table_get(ptr, ptr, i64)
+declare void @sr_table_put(ptr, ptr, i64, ptr)
+declare void @sr_push(ptr, ptr)
+declare void @sr_remove_at(ptr, ptr)
+declare void @sr_remove_key(ptr, ptr)
 declare void @sr_template(ptr, ptr, i64)
 declare void @sr_field_get(ptr, ptr, ptr, i64, ptr)
 declare void @sr_field_set(ptr, ptr, i64, ptr)
@@ -169,11 +187,13 @@ declare void @sr_range(ptr, ptr, ptr, ptr)
 declare i8 @sr_name_is(ptr, i64, ptr, i64)
 declare void @sr_print(ptr)
 declare void @sr_add(ptr, ptr, ptr)
-declare void @sr_add_copy(ptr, ptr, ptr)
+declare void @sr_append(ptr, ptr)
 declare void @sr_sub(ptr, ptr, ptr)
 declare void @sr_mul(ptr, ptr, ptr)
 declare void @sr_div(ptr, ptr, ptr)
 declare void @sr_rem(ptr, ptr, ptr)
+declare i64 @sr_rem_int(i64, i64)
+declare double @sr_rem_real(double, double)
 declare void @sr_greater(ptr, ptr, ptr)
 declare void @sr_less(ptr, ptr, ptr)
 declare void @sr_equal(ptr, ptr, ptr)
@@ -196,10 +216,11 @@ declare void @sr_sources(ptr, i64, i8)
 ";
 
 impl<'a> Emitter<'a> {
-    fn new(program: &'a Program, types: Types) -> Self {
+    fn new(program: &'a Program, types: Types, reuse: crate::reuse::Reuse) -> Self {
         Emitter {
             program,
             types,
+            reuse,
             strings: HashMap::new(),
             constants: String::new(),
             functions: String::new(),
@@ -464,6 +485,41 @@ impl<'a> Emitter<'a> {
         Val { repr, name }
     }
 
+    fn append_in_place(&mut self, place: Place, value: &'a Expr) -> bool {
+        let Expr::Call {
+            callee: Callee::Op(Builtin::Add),
+            args,
+            span,
+        } = value
+        else {
+            return false;
+        };
+        if args.len() != 2 || !self.reuse.allows(self.current, place) {
+            return false;
+        }
+        let same = match (&args[0], place) {
+            (Expr::Local(slot), Place::Local(kept)) => *slot == kept,
+            (Expr::Global(slot), Place::Global(kept)) => *slot == kept,
+            _ => false,
+        };
+        if !same {
+            return false;
+        }
+        let holder = self.place_ptr(place);
+        let tail = self.expr(&args[1]);
+        let tail = self.boxed(tail);
+        self.at(*span);
+        self.line(&format!("call void @sr_append(ptr {holder}, ptr {tail})"));
+        true
+    }
+
+    fn place_ptr(&mut self, place: Place) -> String {
+        match place {
+            Place::Local(slot) => format!("%l{slot}"),
+            Place::Global(slot) => self.global_ptr(slot),
+        }
+    }
+
     fn write_place(&mut self, place: Place, val: Val) {
         match place {
             Place::Local(slot) => {
@@ -562,28 +618,20 @@ impl<'a> Emitter<'a> {
             }
             Expr::Local(slot) => self.read_place(Place::Local(*slot)),
             Expr::Global(slot) => self.read_place(Place::Global(*slot)),
-            Expr::List(items) => {
+            Expr::Table(items, entries) => {
                 let out = self.slot();
-                self.line(&format!("call void @sr_list_new(ptr {out})"));
+                self.line(&format!("call void @sr_table_new(ptr {out})"));
                 for item in items {
                     let value = self.expr(item);
                     let held = self.boxed(value);
-                    self.line(&format!("call void @sr_list_push(ptr {out}, ptr {held})"));
+                    self.line(&format!("call void @sr_table_push(ptr {out}, ptr {held})"));
                 }
-                Val {
-                    repr: Repr::Boxed,
-                    name: out,
-                }
-            }
-            Expr::Dict(entries) => {
-                let out = self.slot();
-                self.line(&format!("call void @sr_dict_new(ptr {out})"));
                 for (key, value) in entries {
                     let value = self.expr(value);
                     let held = self.boxed(value);
                     let (name, len) = self.name_of(*key);
                     self.line(&format!(
-                        "call void @sr_dict_put(ptr {out}, ptr {name}, i64 {len}, ptr {held})"
+                        "call void @sr_table_put(ptr {out}, ptr {name}, i64 {len}, ptr {held})"
                     ));
                 }
                 Val {
@@ -775,9 +823,25 @@ impl<'a> Emitter<'a> {
         let whole = left == Ty::Int && right == Ty::Int;
         let real = left.number() && right.number() && !whole;
 
+        if op == Builtin::Rem && (whole || real) {
+            let (kind, symbol) = if whole {
+                (Repr::Word, "sr_rem_int")
+            } else {
+                (Repr::Real, "sr_rem_real")
+            };
+            let a = self.value(&args[0], kind);
+            let b = self.value(&args[1], kind);
+            let out = self.temp();
+            let ty = kind.llvm();
+            self.line(&format!("{out} = call {ty} @{symbol}({ty} {a}, {ty} {b})"));
+            return Some(Val {
+                repr: kind,
+                name: out,
+            });
+        }
         let arith = |name: &'static str, floating: &'static str| Some((name, floating));
         let found = match op {
-            Builtin::Add | Builtin::AddCopy => arith("add", "fadd"),
+            Builtin::Add => arith("add", "fadd"),
             Builtin::Sub => arith("sub", "fsub"),
             Builtin::Mul => arith("mul", "fmul"),
             _ => None,
@@ -958,6 +1022,9 @@ impl<'a> Emitter<'a> {
     fn statement(&mut self, statement: &'a Stmt) {
         match statement {
             Stmt::Set { place, value } => {
+                if self.append_in_place(*place, value) {
+                    return;
+                }
                 let value = self.expr(value);
                 self.write_place(*place, value);
             }
@@ -1104,7 +1171,7 @@ impl<'a> Emitter<'a> {
             "call void @sr_range(ptr {list}, ptr {start}, ptr {stop}, ptr {step})"
         ));
         let count = self.temp();
-        self.line(&format!("{count} = call i64 @sr_list_len(ptr {list})"));
+        self.line(&format!("{count} = call i64 @sr_table_len(ptr {list})"));
         let index = self.raw("i64");
         self.line(&format!("store i64 0, ptr {index}, align 8"));
 
@@ -1122,7 +1189,7 @@ impl<'a> Emitter<'a> {
         self.mark(&inside);
         let item = self.slot();
         self.line(&format!(
-            "call void @sr_list_get(ptr {item}, ptr {list}, i64 {now})"
+            "call void @sr_table_get(ptr {item}, ptr {list}, i64 {now})"
         ));
         self.write_place(
             place,

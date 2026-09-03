@@ -1,26 +1,40 @@
-use crate::value::{Value, BOOL, DICT, FLOAT, INT, LIST, NOTHING, STR};
+use crate::value::{Value, BOOL, FLOAT, INT, STR, TABLE};
 
 pub fn to_text(value: &Value) -> String {
+    let mut out = String::new();
+    write_text(&mut out, value);
+    out
+}
+
+pub fn write_text(into: &mut String, value: &Value) {
+    use std::fmt::Write;
     match value.tag {
-        NOTHING => "없음".to_string(),
-        BOOL => if value.as_bool() { "참" } else { "거짓" }.to_string(),
-        INT => value.as_int().to_string(),
-        FLOAT => float_text(value.as_float()),
-        STR => value.as_text().to_string(),
-        LIST => {
-            let items = value.as_list().borrow();
-            let shown: Vec<String> = items.iter().map(to_text).collect();
-            format!("[{}]", shown.join(", "))
+        BOOL => into.push_str(if value.as_bool() { "참" } else { "거짓" }),
+        INT => {
+            let _ = write!(into, "{}", value.as_int());
         }
-        DICT => {
-            let entries = value.as_dict().borrow();
-            let shown: Vec<String> = entries
-                .iter()
-                .map(|(key, value)| format!("{key}: {}", to_text(value)))
-                .collect();
-            format!("{{{}}}", shown.join(", "))
+        FLOAT => into.push_str(&float_text(value.as_float())),
+        STR => into.push_str(value.as_text()),
+        TABLE => {
+            let table = value.as_table();
+            into.push('{');
+            for (at, item) in table.items.iter().enumerate() {
+                if at > 0 {
+                    into.push_str(", ");
+                }
+                write_text(into, item);
+            }
+            for (at, (key, item)) in table.keys.iter().enumerate() {
+                if at > 0 || !table.items.is_empty() {
+                    into.push_str(", ");
+                }
+                into.push_str(key);
+                into.push_str(": ");
+                write_text(into, item);
+            }
+            into.push('}');
         }
-        _ => "없음".to_string(),
+        _ => into.push_str("없음"),
     }
 }
 

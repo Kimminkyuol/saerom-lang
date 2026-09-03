@@ -51,11 +51,8 @@ pub enum Expr {
         name: String,
         span: Span,
     },
-    List {
+    Table {
         items: Vec<Expr>,
-        span: Span,
-    },
-    Dict {
         entries: Vec<(String, Expr)>,
         span: Span,
     },
@@ -87,8 +84,7 @@ impl Expr {
         match self {
             Expr::Literal { span, .. }
             | Expr::Name { span, .. }
-            | Expr::List { span, .. }
-            | Expr::Dict { span, .. }
+            | Expr::Table { span, .. }
             | Expr::Template { span, .. }
             | Expr::Field { span, .. }
             | Expr::And { span, .. }
@@ -131,8 +127,7 @@ pub enum LoopKind {
 #[derive(Clone, Debug)]
 pub enum Stmt {
     Declare {
-        target: Target,
-        value: Expr,
+        assigns: Vec<(Target, Expr)>,
         span: Span,
     },
     Exec {

@@ -16,7 +16,7 @@ pub fn sources() -> Vec<PathBuf> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "sr"))
         .collect();
     found.sort();
-    assert!(found.len() >= 16, "검사할 소스가 모자람: {}", found.len());
+    assert!(found.len() >= 9, "검사할 소스가 모자람: {}", found.len());
     found
 }
 
@@ -58,4 +58,31 @@ fn gap(wanted: &str, made: &str) -> String {
         wanted.lines().count(),
         made.lines().count()
     )
+}
+
+pub fn build_and_run(source: &str, name: &str) -> String {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let file = dir.join(format!("{name}.sr"));
+    std::fs::write(&file, source).expect("소스를 쓸 수 없음");
+    let output = dir.join(name);
+    let built = std::process::Command::new(env!("CARGO_BIN_EXE_saeromc"))
+        .arg(&file)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("saeromc 를 부를 수 없음");
+    assert!(
+        built.status.success(),
+        "컴파일 실패\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = std::process::Command::new(&output)
+        .output()
+        .expect("실행할 수 없음");
+    assert!(
+        ran.status.success(),
+        "실행 실패\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    String::from_utf8_lossy(&ran.stdout).into_owned()
 }

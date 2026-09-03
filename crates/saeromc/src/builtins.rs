@@ -7,7 +7,9 @@ pub enum Builtin {
     Clone,
     Convert,
     Add,
-    AddCopy,
+    Push,
+    RemoveAt,
+    RemoveKey,
     Sub,
     Mul,
     Div,
@@ -47,6 +49,7 @@ pub fn table() -> &'static [Def] {
         };
         vec![
             one("출력하다", "를", Builtin::Print),
+            two("추가하다", "에", "를", Builtin::Push),
             one("종료하다", "로", Builtin::Stop),
             one("복사하다", "를", Builtin::Clone),
             two("바꾸다", "를", "로", Builtin::Convert),

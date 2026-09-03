@@ -225,7 +225,7 @@ fn starts_value(tok: &Tok) -> bool {
     match tok {
         Tok::Number(_) | Tok::Str(_) | Tok::Template(_) | Tok::Name(_) => true,
         Tok::Keyword(word) => {
-            matches!(word.as_str(), "참" | "거짓" | "없음" | "목록" | "사전")
+            matches!(word.as_str(), "참" | "거짓" | "없음" | "묶음")
         }
         Tok::Symbol(ch) => *ch == '[' || *ch == '{',
         _ => false,
@@ -395,7 +395,11 @@ impl<'a> Parser<'a> {
             items.pop().expect("항 하나")
         } else {
             let span = items[0].span();
-            Expr::List { items, span }
+            Expr::Table {
+                items,
+                entries: Vec::new(),
+                span,
+            }
         };
         let mut marker = Marker::Bare;
         if let Tok::Particle { canon, .. } = self.peek() {
@@ -558,16 +562,10 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
-            Tok::Keyword(word) if word == "목록" => {
+            Tok::Keyword(word) if word == "묶음" => {
                 self.at += 1;
-                Ok(Expr::List {
+                Ok(Expr::Table {
                     items: Vec::new(),
-                    span,
-                })
-            }
-            Tok::Keyword(word) if word == "사전" => {
-                self.at += 1;
-                Ok(Expr::Dict {
                     entries: Vec::new(),
                     span,
                 })
@@ -697,13 +695,13 @@ impl<'a> Parser<'a> {
         }
         if let Some(target) = self.try_target()? {
             let span = target.span;
-            let value = self.value_until_copula()?;
+            let assigns = if self.looks_like_table() {
+                vec![(target, self.table_value()?)]
+            } else {
+                self.declare_chain(target)?
+            };
             self.end_of_statement()?;
-            return Ok(Stmt::Declare {
-                target,
-                value,
-                span,
-            });
+            return Ok(Stmt::Declare { assigns, span });
         }
         self.exec_or_loop()
     }
@@ -775,21 +773,127 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn value_until_copula(&mut self) -> Result<Expr> {
+    fn looks_like_table(&self) -> bool {
+        let end = self.line_end();
+        end >= self.at + 3
+            && self.tok_at(end - 1) == &Tok::Symbol('.')
+            && matches!(
+                self.tok_at(end - 2),
+                Tok::Copula {
+                    ending: Ending::Final
+                }
+            )
+            && matches!(self.tok_at(end - 3), Tok::Keyword(word) if word == "묶음")
+    }
+
+    fn table_value(&mut self) -> Result<Expr> {
+        let span = self.span();
+        let mut entries = Vec::new();
+        while !self.keyword_at(0, "묶음") {
+            entries.push(self.table_entry()?);
+        }
+        self.at += 1;
+        self.expect(
+            &Tok::Copula {
+                ending: Ending::Final,
+            },
+            msg::WANT_COPULA,
+        )?;
+        Ok(Expr::Table {
+            items: Vec::new(),
+            entries,
+            span,
+        })
+    }
+
+    fn table_entry(&mut self) -> Result<(String, Expr)> {
+        let (name, _) = self.expect_name()?;
+        if !matches!(
+            self.peek(),
+            Tok::Particle {
+                role: "subject",
+                ..
+            }
+        ) {
+            return Err(Diag::syntax(
+                msg::not_a_particle(&describe(self.peek())),
+                self.span(),
+            ));
+        }
+        self.at += 1;
         let mut slots: Vec<Slot> = Vec::new();
         loop {
             let token = self.ahead(0);
             if matches!(
                 token.tok,
                 Tok::Copula {
-                    ending: Ending::Final
+                    ending: Ending::Conjunctive | Ending::AdnominalPast
                 }
             ) {
                 self.at += 1;
                 if slots.len() != 1 {
                     return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
                 }
-                return Ok(slots.pop().expect("값 하나").expr);
+                return Ok((name, slots.pop().expect("값 하나").expr));
+            }
+            if matches!(token.tok, Tok::Verb { .. } | Tok::Copula { .. }) {
+                let info = self.take_verb()?;
+                let (value, kept) = self.reduce(slots, info)?;
+                slots = kept;
+                self.push(&mut slots, value)?;
+                continue;
+            }
+            if matches!(token.tok, Tok::Newline | Tok::Eof) {
+                return Err(Diag::syntax(msg::TABLE_NO_END, token.span));
+            }
+            let value = self.primary()?;
+            self.push(&mut slots, value)?;
+        }
+    }
+
+    fn declare_chain(&mut self, first: Target) -> Result<Vec<(Target, Expr)>> {
+        let mut assigns = Vec::new();
+        let mut target = first;
+        loop {
+            let (value, more) = self.value_until_copula()?;
+            assigns.push((target.clone(), value));
+            if !more {
+                return Ok(assigns);
+            }
+            let (name, span) = self.expect_name()?;
+            if !matches!(self.peek(), Tok::Particle { role: "topic", .. }) {
+                return Err(Diag::syntax(
+                    msg::not_a_particle(&describe(self.peek())),
+                    self.span(),
+                ));
+            }
+            self.at += 1;
+            let mut fields = target.fields.clone();
+            let root = match fields.pop() {
+                Some(_) => {
+                    fields.push(name);
+                    target.root.clone()
+                }
+                None => name,
+            };
+            target = Target { root, fields, span };
+        }
+    }
+
+    fn value_until_copula(&mut self) -> Result<(Expr, bool)> {
+        let mut slots: Vec<Slot> = Vec::new();
+        loop {
+            let token = self.ahead(0);
+            if let Tok::Copula {
+                ending: ending @ (Ending::Final | Ending::Conjunctive),
+            } = token.tok
+            {
+                self.at += 1;
+                if slots.len() != 1 {
+                    return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
+                }
+                let value = slots.pop().expect("값 하나").expr;
+                return Ok((value, ending == Ending::Conjunctive));
             }
             if matches!(token.tok, Tok::Verb { .. } | Tok::Copula { .. }) {
                 let info = self.take_verb()?;

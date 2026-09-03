@@ -11,6 +11,7 @@ pub mod load;
 pub mod parse;
 pub mod prescan;
 pub mod resolve;
+pub mod reuse;
 pub mod sig;
 pub mod types;
 pub mod words;

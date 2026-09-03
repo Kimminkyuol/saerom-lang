@@ -138,14 +138,18 @@ fn expr_tree(expr: &Expr) -> Tree {
             Literal::Bool(found) => format!("lit bool {}", if *found { "참" } else { "거짓" }),
         }),
         Expr::Name { name, .. } => leaf(format!("name {name}")),
-        Expr::List { items, .. } => node("list", items.iter().map(expr_tree).collect()),
-        Expr::Dict { entries, .. } => node(
-            "dict",
-            entries
-                .iter()
-                .map(|(key, value)| node(format!("entry {key}"), vec![expr_tree(value)]))
-                .collect(),
-        ),
+        Expr::Table { items, entries, .. } => {
+            node(
+                "table",
+                items
+                    .iter()
+                    .map(expr_tree)
+                    .chain(entries.iter().map(|(key, value)| {
+                        node(format!("entry {key}"), vec![expr_tree(value)])
+                    }))
+                    .collect(),
+            )
+        }
         Expr::Template { parts, .. } => node(
             "template",
             parts
@@ -184,12 +188,17 @@ fn block_tree(label: &str, body: &Block) -> Tree {
 
 fn statement_tree(statement: &Stmt) -> Tree {
     match statement {
-        Stmt::Declare { target, value, .. } => node(
+        Stmt::Declare { assigns, .. } => node(
             "declare",
-            vec![
-                node("target", vec![target_tree(target)]),
-                node("value", vec![expr_tree(value)]),
-            ],
+            assigns
+                .iter()
+                .flat_map(|(target, value)| {
+                    [
+                        node("target", vec![target_tree(target)]),
+                        node("value", vec![expr_tree(value)]),
+                    ]
+                })
+                .collect(),
         ),
         Stmt::Exec { calls, .. } => node("exec", calls.iter().map(call_tree).collect()),
         Stmt::Value { expr, .. } => node("value", vec![expr_tree(expr)]),
@@ -408,17 +417,17 @@ fn hir_expr(program: &hir::Program, expr: &hir::Expr) -> Tree {
         E::Nothing => leaf("nothing"),
         E::Local(slot) => leaf(format!("local {slot}")),
         E::Global(slot) => leaf(format!("global {slot}")),
-        E::List(items) => node("list", items.iter().map(|i| hir_expr(program, i)).collect()),
-        E::Dict(entries) => node(
-            "dict",
-            entries
+        E::Table(items, entries) => node(
+            "table",
+            items
                 .iter()
-                .map(|(key, value)| {
+                .map(|i| hir_expr(program, i))
+                .chain(entries.iter().map(|(key, value)| {
                     node(
                         format!("entry {}", program.names.name(*key)),
                         vec![hir_expr(program, value)],
                     )
-                })
+                }))
                 .collect(),
         ),
         E::Template(parts) => node(

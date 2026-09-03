@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SKIP: &[&str] = &["14-입력", "15-종료"];
+const SKIP: &[&str] = &["07-입력", "08-종료"];
 
 fn fixtures() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -57,7 +57,7 @@ fn build_and_run(path: &Path) -> String {
 #[test]
 fn examples_print_what_they_annotate() {
     let found = fixtures();
-    assert!(found.len() >= 13, "검사할 예시가 모자람: {}", found.len());
+    assert!(found.len() >= 7, "검사할 예시가 모자람: {}", found.len());
     for path in found {
         let source = std::fs::read_to_string(&path).expect("소스를 읽을 수 없음");
         let wanted = annotations(&source);

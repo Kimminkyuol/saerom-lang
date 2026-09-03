@@ -1,12 +1,51 @@
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 
 pub const NOTHING: u64 = 0;
 pub const BOOL: u64 = 1;
 pub const INT: u64 = 2;
 pub const FLOAT: u64 = 3;
 pub const STR: u64 = 4;
-pub const LIST: u64 = 5;
-pub const DICT: u64 = 6;
+pub const TABLE: u64 = 5;
+
+#[derive(Default)]
+pub struct Table {
+    pub items: Vec<Value>,
+    pub keys: Vec<(&'static str, Value)>,
+}
+
+impl Table {
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.keys
+            .iter()
+            .find(|(found, _)| same(found, key))
+            .map(|(_, value)| *value)
+    }
+
+    pub fn put(&mut self, key: &'static str, value: Value) {
+        match self.keys.iter_mut().find(|(found, _)| same(found, key)) {
+            Some(slot) => slot.1 = value,
+            None => self.keys.push((key, value)),
+        }
+    }
+
+    pub fn drop_key(&mut self, key: &str) -> bool {
+        match self.keys.iter().position(|(found, _)| same(found, key)) {
+            Some(at) => {
+                self.keys.remove(at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn empty(&self) -> bool {
+        self.items.is_empty() && self.keys.is_empty()
+    }
+}
+
+fn same(left: &str, right: &str) -> bool {
+    std::ptr::eq(left, right) || left == right
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -51,18 +90,18 @@ impl Value {
         }
     }
 
-    pub fn list(found: Vec<Value>) -> Value {
+    pub fn table(found: Table) -> Value {
         Value {
-            tag: LIST,
-            bits: leak(RefCell::new(found)),
+            tag: TABLE,
+            bits: leak(UnsafeCell::new(found)),
         }
     }
 
-    pub fn dict(found: Vec<(String, Value)>) -> Value {
-        Value {
-            tag: DICT,
-            bits: leak(RefCell::new(found)),
-        }
+    pub fn items(found: Vec<Value>) -> Value {
+        Value::table(Table {
+            items: found,
+            keys: Vec::new(),
+        })
     }
 
     pub fn as_int(&self) -> i64 {
@@ -81,12 +120,12 @@ impl Value {
         unsafe { &*(self.bits as *const String) }
     }
 
-    pub fn as_list(&self) -> &'static RefCell<Vec<Value>> {
-        unsafe { &*(self.bits as *const RefCell<Vec<Value>>) }
+    pub fn as_string(&self) -> &'static mut String {
+        unsafe { &mut *(self.bits as *mut String) }
     }
 
-    pub fn as_dict(&self) -> &'static RefCell<Vec<(String, Value)>> {
-        unsafe { &*(self.bits as *const RefCell<Vec<(String, Value)>>) }
+    pub fn as_table(&self) -> &'static mut Table {
+        unsafe { &mut *(*(self.bits as *const UnsafeCell<Table>)).get() }
     }
 
     pub fn number(&self) -> bool {
@@ -106,8 +145,7 @@ impl Value {
             BOOL => "논리값",
             INT | FLOAT => "수",
             STR => "문자열",
-            LIST => "목록",
-            DICT => "사전",
+            TABLE => "묶음",
             _ => "값",
         }
     }
@@ -118,8 +156,7 @@ impl Value {
             INT => "정수",
             FLOAT => "실수",
             STR => "문자열",
-            LIST => "목록",
-            DICT => "사전",
+            TABLE => "묶음",
             _ => "값",
         }
     }
@@ -131,8 +168,7 @@ impl Value {
             INT => self.as_int() != 0,
             FLOAT => self.as_float() != 0.0,
             STR => !self.as_text().is_empty(),
-            LIST => !self.as_list().borrow().is_empty(),
-            DICT => !self.as_dict().borrow().is_empty(),
+            TABLE => !self.as_table().empty(),
             _ => true,
         }
     }
@@ -156,17 +192,14 @@ pub fn equal(left: &Value, right: &Value) -> bool {
         NOTHING => true,
         BOOL => left.as_bool() == right.as_bool(),
         STR => left.as_text() == right.as_text(),
-        LIST => {
-            let (a, b) = (left.as_list().borrow(), right.as_list().borrow());
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| equal(x, y))
-        }
-        DICT => {
-            let (a, b) = (left.as_dict().borrow(), right.as_dict().borrow());
-            a.len() == b.len()
-                && a.iter().all(|(key, value)| {
-                    b.iter()
-                        .any(|(other, kept)| other == key && equal(value, kept))
-                })
+        TABLE => {
+            let (a, b) = (left.as_table(), right.as_table());
+            a.items.len() == b.items.len()
+                && a.keys.len() == b.keys.len()
+                && a.items.iter().zip(b.items.iter()).all(|(x, y)| equal(x, y))
+                && a.keys
+                    .iter()
+                    .all(|(key, value)| b.get(key).is_some_and(|kept| equal(value, &kept)))
         }
         _ => left.bits == right.bits,
     }

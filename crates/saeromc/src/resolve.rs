@@ -268,7 +268,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    
     fn take_definitions(&mut self, unit: UnitId, target: UnitId) {
         let verbs: Vec<Verb> = self.tables[target]
             .verbs
@@ -371,9 +370,12 @@ fn blocks_of(statement: &ASt) -> Vec<&[ASt]> {
 fn bind_names(statements: &[ASt], into: &mut Vec<String>) {
     for statement in statements {
         match statement {
-            ASt::Declare { target, .. } if target.fields.is_empty() => {
-                into.push(target.root.clone())
-            }
+            ASt::Declare { assigns, .. } => into.extend(
+                assigns
+                    .iter()
+                    .filter(|(target, _)| target.fields.is_empty())
+                    .map(|(target, _)| target.root.clone()),
+            ),
             ASt::Loop {
                 kind: LoopKind::Range { variable, .. },
                 ..
@@ -484,37 +486,35 @@ impl<'a> Resolver<'a> {
 
     fn lower_stmt(&mut self, frame: &mut Frame, statement: &'a ASt, out: &mut Vec<Stmt>) {
         match statement {
-            ASt::Declare {
-                target,
-                value,
-                span,
-            } => {
-                let value = self.lower_expr(frame, value);
-                if target.fields.is_empty() {
-                    let place = frame.place(
-                        &target.root,
-                        &mut self.tables[frame.unit],
-                        &mut self.globals,
-                    );
-                    out.push(Stmt::Set { place, value });
-                    return;
-                }
-                let mut owner = self.read_name(frame, &target.root, target.span);
-                for field in &target.fields[..target.fields.len() - 1] {
-                    let field = self.names.intern(field);
-                    owner = Expr::Field {
-                        owner: Box::new(owner),
+            ASt::Declare { assigns, span } => {
+                for (target, value) in assigns {
+                    let value = self.lower_expr(frame, value);
+                    if target.fields.is_empty() {
+                        let place = frame.place(
+                            &target.root,
+                            &mut self.tables[frame.unit],
+                            &mut self.globals,
+                        );
+                        out.push(Stmt::Set { place, value });
+                        continue;
+                    }
+                    let mut owner = self.read_name(frame, &target.root, target.span);
+                    for field in &target.fields[..target.fields.len() - 1] {
+                        let field = self.names.intern(field);
+                        owner = Expr::Field {
+                            owner: Box::new(owner),
+                            field,
+                            span: target.span,
+                        };
+                    }
+                    let field = self.names.intern(target.fields.last().expect("필드"));
+                    out.push(Stmt::SetField {
+                        owner,
                         field,
-                        span: target.span,
-                    };
+                        value,
+                        span: *span,
+                    });
                 }
-                let field = self.names.intern(target.fields.last().expect("필드"));
-                out.push(Stmt::SetField {
-                    owner,
-                    field,
-                    value,
-                    span: *span,
-                });
             }
             ASt::Exec { calls, .. } => {
                 for call in calls {
@@ -614,13 +614,11 @@ impl<'a> Resolver<'a> {
                 ast::Literal::Bool(found) => Expr::Bool(*found),
             },
             ast::Expr::Name { name, span } => self.read_name(frame, name, *span),
-            ast::Expr::List { items, .. } => Expr::List(
+            ast::Expr::Table { items, entries, .. } => Expr::Table(
                 items
                     .iter()
                     .map(|item| self.lower_expr(frame, item))
                     .collect(),
-            ),
-            ast::Expr::Dict { entries, .. } => Expr::Dict(
                 entries
                     .iter()
                     .map(|(key, value)| {
@@ -744,6 +742,9 @@ impl<'a> Resolver<'a> {
             }
         }
         let namespaced = home != frame.unit;
+        if !namespaced && call.verb == "제거하다" {
+            return self.lower_remove(frame, call, &slots);
+        }
         if call.verb == "이다" {
             if let Some(found) = self.lower_predicate(frame, call, &slots, home) {
                 return found;
@@ -755,6 +756,42 @@ impl<'a> Resolver<'a> {
             args.push((slot.marker, value));
         }
         self.finish_call(frame, &call.verb, args, home, namespaced, call)
+    }
+
+    fn lower_remove(
+        &mut self,
+        frame: &mut Frame,
+        call: &'a ast::CallExpr,
+        slots: &[&'a ast::Slot],
+    ) -> Expr {
+        let target = slots
+            .iter()
+            .find(|slot| slot.marker == Marker::Case("를"))
+            .map(|slot| &slot.expr);
+        let Some(ast::Expr::Field { owner, name, span }) = target else {
+            self.note(frame.unit, Diag::syntax(msg::REMOVE_NEEDS_FIELD, call.span));
+            return Expr::Nothing;
+        };
+        let (op, place) = match self.lower_field(frame, owner, name, *span) {
+            Expr::Index { owner, place, .. } => (Callee::Op(builtins::Builtin::RemoveAt), {
+                let mut args = vec![*owner];
+                args.push(*place);
+                args
+            }),
+            Expr::Field { owner, field, .. } => (
+                Callee::Op(builtins::Builtin::RemoveKey),
+                vec![*owner, Expr::Str(Rc::from(self.names.name(field)))],
+            ),
+            _ => {
+                self.note(frame.unit, Diag::syntax(msg::REMOVE_NEEDS_FIELD, call.span));
+                return Expr::Nothing;
+            }
+        };
+        Expr::Call {
+            callee: op,
+            args: place,
+            span: call.span,
+        }
     }
 
     fn lower_predicate(
@@ -835,12 +872,8 @@ impl<'a> Resolver<'a> {
         }
         if !namespaced {
             if let Some(def) = builtins::find(verb, &used) {
-                let op = match (def.op, call.tail.is_some()) {
-                    (builtins::Builtin::Add, true) => builtins::Builtin::AddCopy,
-                    (op, _) => op,
-                };
                 let made = Expr::Call {
-                    callee: Callee::Op(op),
+                    callee: Callee::Op(def.op),
                     args: order_args(args, def.params),
                     span: call.span,
                 };

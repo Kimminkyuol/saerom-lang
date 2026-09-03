@@ -1,6 +1,6 @@
 use crate::msg;
 use crate::report::{self, Report};
-use crate::text::{show, to_text};
+use crate::text::{show, to_text, write_text};
 use crate::value::*;
 use std::io::Write;
 
@@ -136,7 +136,7 @@ fn trace() -> String {
 }
 
 fn fail(kind: &str, message: String) -> ! {
-    let _ = std::io::stdout().flush();
+    flush_out();
     let here = unsafe { std::ptr::read(&raw const SR_POS) };
     match spot(here) {
         Some(spot) => eprint!(
@@ -213,33 +213,61 @@ pub unsafe extern "C" fn sr_truthy(found: *const Value) -> i8 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_list_new(out: *mut Value) {
-    *out = Value::list(Vec::new());
+pub unsafe extern "C" fn sr_table_new(out: *mut Value) {
+    *out = Value::table(Table::default());
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_list_push(list: *const Value, item: *const Value) {
-    at(list).as_list().borrow_mut().push(*at(item));
+pub unsafe extern "C" fn sr_table_push(table: *const Value, item: *const Value) {
+    at(table).as_table().items.push(*at(item));
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_dict_new(out: *mut Value) {
-    *out = Value::dict(Vec::new());
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_dict_put(
-    dict: *const Value,
+pub unsafe extern "C" fn sr_table_put(
+    table: *const Value,
     bytes: *const u8,
     len: usize,
     item: *const Value,
 ) {
-    let key = name_of(bytes, len);
-    let dict = at(dict).as_dict();
-    let mut entries = dict.borrow_mut();
-    match entries.iter_mut().find(|(found, _)| found == key) {
-        Some(slot) => slot.1 = *at(item),
-        None => entries.push((key.to_string(), *at(item))),
+    at(table).as_table().put(name_of(bytes, len), *at(item));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_push(table: *const Value, item: *const Value) {
+    let found = at(table);
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("추가하다", found.kind()));
+    }
+    found.as_table().items.push(*at(item));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_remove_at(table: *const Value, place: *const Value) {
+    let found = at(table);
+    let place = at(place);
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("제거하다", found.kind()));
+    }
+    if place.tag != INT {
+        fail(msg::VALUE, msg::place_not_int(&to_text(place)));
+    }
+    let index = place.as_int();
+    let held = found.as_table();
+    if index < 1 || index as usize > held.items.len() {
+        fail(msg::VALUE, msg::out_of_range(index, held.items.len()));
+    }
+    held.items.remove(index as usize - 1);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_remove_key(table: *const Value, key: *const Value) {
+    let found = at(table);
+    let key = at(key).as_text();
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("제거하다", found.kind()));
+    }
+    if !found.as_table().drop_key(key) {
+        fail(msg::NAME, msg::no_field(key));
     }
 }
 
@@ -247,39 +275,65 @@ pub unsafe extern "C" fn sr_dict_put(
 pub unsafe extern "C" fn sr_template(out: *mut Value, parts: *const Value, count: usize) {
     let mut text = String::new();
     for index in 0..count {
-        text.push_str(&to_text(at(parts.add(index))));
+        write_text(&mut text, at(parts.add(index)));
     }
     *out = Value::text(text);
 }
 
+static mut OUT: Vec<u8> = Vec::new();
+
+const OUT_LIMIT: usize = 1 << 16;
+
+fn out_buffer() -> &'static mut Vec<u8> {
+    unsafe { &mut *std::ptr::addr_of_mut!(OUT) }
+}
+
+fn flush_out() {
+    let buffer = out_buffer();
+    if buffer.is_empty() {
+        return;
+    }
+    let stdout = std::io::stdout();
+    let mut held = stdout.lock();
+    let _ = held.write_all(buffer);
+    let _ = held.flush();
+    buffer.clear();
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sr_print(found: *const Value) {
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    let _ = out.write_all(to_text(at(found)).as_bytes());
+    let found = at(found);
+    let buffer = out_buffer();
+    if found.tag == STR {
+        buffer.extend_from_slice(found.as_text().as_bytes());
+    } else {
+        let mut text = String::new();
+        write_text(&mut text, found);
+        buffer.extend_from_slice(text.as_bytes());
+    }
+    if buffer.len() >= OUT_LIMIT {
+        flush_out();
+    }
 }
 
 fn deep_copy(found: &Value) -> Value {
-    match found.tag {
-        LIST => Value::list(found.as_list().borrow().iter().map(deep_copy).collect()),
-        DICT => Value::dict(
-            found
-                .as_dict()
-                .borrow()
-                .iter()
-                .map(|(key, value)| (key.clone(), deep_copy(value)))
-                .collect(),
-        ),
-        _ => *found,
+    if found.tag != TABLE {
+        return *found;
     }
+    let held = found.as_table();
+    Value::table(Table {
+        items: held.items.iter().map(deep_copy).collect(),
+        keys: held
+            .keys
+            .iter()
+            .map(|(key, value)| (*key, deep_copy(value)))
+            .collect(),
+    })
 }
 
-fn at_index(found: &Value, index: usize, field: &str, size: usize) -> Value {
-    if index >= size {
-        fail(msg::VALUE, msg::empty_at(field, size))
-    }
+fn at_index(found: &Value, index: usize) -> Value {
     match found.tag {
-        LIST => found.as_list().borrow()[index],
+        TABLE => found.as_table().items[index],
         _ => Value::text(
             found
                 .as_text()
@@ -305,30 +359,30 @@ pub unsafe extern "C" fn sr_field_get(
         *out = Value::text(owner.type_name().to_string());
         return;
     }
-    if owner.tag == DICT {
-        if let Some((_, value)) = owner
-            .as_dict()
-            .borrow()
-            .iter()
-            .find(|(key, _)| key == field)
-        {
-            *out = *value;
+    if owner.tag == TABLE {
+        if let Some(value) = owner.as_table().get(field) {
+            *out = value;
             return;
         }
     }
-    let size = match owner.tag {
-        LIST => Some(owner.as_list().borrow().len()),
-        STR => Some(owner.as_text().chars().count()),
-        _ => None,
-    };
-    if let Some(size) = size {
-        if (field == "개수" && owner.tag == LIST) || (field == "글자수" && owner.tag == STR)
-        {
+    if field == "명칭" && owner.tag == TABLE {
+        let names = owner
+            .as_table()
+            .keys
+            .iter()
+            .map(|(key, _)| Value::text(key.to_string()))
+            .collect();
+        *out = Value::items(names);
+        return;
+    }
+    if field == "길이" {
+        let size = match owner.tag {
+            TABLE => Some(owner.as_table().items.len()),
+            STR => Some(owner.as_text().chars().count()),
+            _ => None,
+        };
+        if let Some(size) = size {
             *out = Value::int(size as i64);
-            return;
-        }
-        if field == "마지막" {
-            *out = at_index(owner, size.wrapping_sub(1), field, size);
             return;
         }
     }
@@ -337,7 +391,7 @@ pub unsafe extern "C" fn sr_field_get(
             return;
         }
     }
-    if owner.tag == DICT {
+    if owner.tag == TABLE {
         fail(msg::NAME, msg::no_field(field));
     }
     fail(msg::NAME, msg::no_field_on(owner.kind(), field));
@@ -351,11 +405,11 @@ pub unsafe extern "C" fn sr_field_set(
     value: *const Value,
 ) {
     let found = at(owner);
-    if found.tag != DICT {
+    if found.tag != TABLE {
         let field = name_of(bytes, len);
         fail(msg::VALUE, msg::no_field_on(found.kind(), field));
     }
-    sr_dict_put(owner, bytes, len, value);
+    sr_table_put(owner, bytes, len, value);
 }
 
 #[no_mangle]
@@ -366,7 +420,7 @@ pub unsafe extern "C" fn sr_index(out: *mut Value, owner: *const Value, place: *
         fail(msg::VALUE, msg::place_not_int(&to_text(place)));
     }
     let size = match owner.tag {
-        LIST => owner.as_list().borrow().len(),
+        TABLE => owner.as_table().items.len(),
         STR => owner.as_text().chars().count(),
         _ => {
             fail(msg::NAME, msg::no_place(owner.kind()));
@@ -376,7 +430,7 @@ pub unsafe extern "C" fn sr_index(out: *mut Value, owner: *const Value, place: *
     if index < 1 || index as usize > size {
         fail(msg::VALUE, msg::out_of_range(index, size));
     }
-    *out = at_index(owner, index as usize - 1, "자리", size);
+    *out = at_index(owner, index as usize - 1);
 }
 
 fn arith(
@@ -397,21 +451,34 @@ fn arith(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn sr_append(dst: *mut Value, tail: *const Value) {
+    let held = &mut *dst;
+    let tail = at(tail);
+    if held.tag != STR || held.bits == tail.bits {
+        return sr_add(dst, dst, tail);
+    }
+    let text = held.as_string();
+    if tail.tag == STR {
+        text.push_str(tail.as_text());
+    } else {
+        write_text(text, tail);
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sr_add(out: *mut Value, left: *const Value, right: *const Value) {
     let (left, right) = (at(left), at(right));
-    if left.tag == LIST {
-        let target = left.as_list();
-        if right.tag == LIST {
-            let extra: Vec<Value> = right.as_list().borrow().clone();
-            target.borrow_mut().extend(extra);
-        } else {
-            target.borrow_mut().push(*right);
-        }
-        *out = *left;
-        return;
-    }
     if left.tag == STR {
-        *out = Value::text(format!("{}{}", left.as_text(), to_text(right)));
+        let head = left.as_text();
+        let tail = if right.tag == STR {
+            right.as_text().len()
+        } else {
+            16
+        };
+        let mut made = String::with_capacity(head.len() + tail);
+        made.push_str(head);
+        write_text(&mut made, right);
+        *out = Value::text(made);
         return;
     }
     arith(
@@ -422,16 +489,6 @@ pub unsafe extern "C" fn sr_add(out: *mut Value, left: *const Value, right: *con
         |a, b| a.wrapping_add(b),
         |a, b| a + b,
     );
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_add_copy(out: *mut Value, left: *const Value, right: *const Value) {
-    let left = at(left);
-    if left.tag == LIST {
-        let copy = Value::list(left.as_list().borrow().clone());
-        return sr_add(out, &copy, right);
-    }
-    sr_add(out, left, right);
 }
 
 #[no_mangle]
@@ -476,6 +533,27 @@ pub unsafe extern "C" fn sr_div(out: *mut Value, left: *const Value, right: *con
     } else {
         Value::float(made)
     };
+}
+
+#[no_mangle]
+pub extern "C" fn sr_rem_int(left: i64, right: i64) -> i64 {
+    if right == 0 {
+        fail(msg::ARITH, msg::DIV_ZERO.to_string());
+    }
+    let made = left.wrapping_rem(right);
+    if made != 0 && (made < 0) != (right < 0) {
+        made + right
+    } else {
+        made
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn sr_rem_real(left: f64, right: f64) -> f64 {
+    if right == 0.0 {
+        fail(msg::ARITH, msg::DIV_ZERO.to_string());
+    }
+    left - right * (left / right).floor()
 }
 
 #[no_mangle]
@@ -597,13 +675,13 @@ pub unsafe extern "C" fn sr_name_is(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_list_len(found: *const Value) -> i64 {
-    at(found).as_list().borrow().len() as i64
+pub unsafe extern "C" fn sr_table_len(found: *const Value) -> i64 {
+    at(found).as_table().items.len() as i64
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_list_get(out: *mut Value, found: *const Value, index: i64) {
-    *out = at(found).as_list().borrow()[index as usize];
+pub unsafe extern "C" fn sr_table_get(out: *mut Value, found: *const Value, index: i64) {
+    *out = at(found).as_table().items[index as usize];
 }
 
 #[no_mangle]
@@ -633,7 +711,7 @@ pub unsafe extern "C" fn sr_range(
         });
         now += if down { -by } else { by };
     }
-    *out = Value::list(made);
+    *out = Value::items(made);
 }
 
 #[no_mangle]
@@ -648,7 +726,7 @@ thread_local! {
 
 #[no_mangle]
 pub extern "C" fn sr_finish() {
-    let _ = std::io::stdout().flush();
+    flush_out();
 }
 
 #[no_mangle]
@@ -691,6 +769,7 @@ pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *co
     use std::os::unix::io::FromRawFd;
     let fd = descriptor("읽다", at(file));
     let want = descriptor("읽다", at(count)).max(0) as usize;
+    flush_out();
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
     let mut buffer = vec![0u8; want];
     let read = held.read(&mut buffer).unwrap_or_else(|error| {
@@ -704,6 +783,9 @@ pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *co
 pub unsafe extern "C" fn sr_write(out: *mut Value, file: *const Value, text: *const Value) {
     use std::os::unix::io::FromRawFd;
     let fd = descriptor("쓰다", at(file));
+    if fd == 1 || fd == 2 {
+        flush_out();
+    }
     let body = to_text(at(text));
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
     let written = held.write(body.as_bytes()).unwrap_or_else(|error| {

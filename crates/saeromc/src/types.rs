@@ -12,8 +12,7 @@ pub enum Ty {
     Int,
     Float,
     Str,
-    List,
-    Dict,
+    Table,
     Any,
 }
 
@@ -35,8 +34,8 @@ impl Ty {
 #[derive(Default)]
 pub struct Fields {
     kind: Option<Symbol>,
-    count: Option<Symbol>,
-    letters: Option<Symbol>,
+    length: Option<Symbol>,
+    names: Option<Symbol>,
 }
 
 pub struct Types {
@@ -68,8 +67,7 @@ impl Types {
             Expr::Nothing => Ty::Nothing,
             Expr::Local(slot) => self.place(function, Place::Local(*slot)),
             Expr::Global(slot) => self.globals[*slot as usize],
-            Expr::List(_) => Ty::List,
-            Expr::Dict(_) => Ty::Dict,
+            Expr::Table(..) => Ty::Table,
             Expr::Template(_) => Ty::Str,
             Expr::Field { owner, field, .. } => self.field(function, owner, *field),
             Expr::Index { .. } => Ty::Any,
@@ -84,11 +82,11 @@ impl Types {
         if found == self.fields.kind {
             return Ty::Str;
         }
-        if found == self.fields.count && held == Ty::List {
+        if found == self.fields.length && matches!(held, Ty::Table | Ty::Str) {
             return Ty::Int;
         }
-        if found == self.fields.letters && held == Ty::Str {
-            return Ty::Int;
+        if found == self.fields.names && held == Ty::Table {
+            return Ty::Table;
         }
         if let Some(candidates) = self.nouns.get(&field) {
             if matches!(held, Ty::Int | Ty::Float | Ty::Bool) {
@@ -114,11 +112,11 @@ impl Types {
             Builtin::Close => Ty::Nothing,
             Builtin::Clone => arg(0),
             Builtin::Convert => self.converted(function, args),
-            Builtin::Add | Builtin::AddCopy => match (arg(0), arg(1)) {
-                (Ty::List, _) => Ty::List,
+            Builtin::Add => match (arg(0), arg(1)) {
                 (Ty::Str, _) => Ty::Str,
                 (a, b) => arithmetic(a, b),
             },
+            Builtin::Push | Builtin::RemoveAt | Builtin::RemoveKey => Ty::Nothing,
             Builtin::Sub | Builtin::Mul | Builtin::Rem => arithmetic(arg(0), arg(1)),
             Builtin::Div => Ty::Any,
         }
@@ -155,8 +153,8 @@ pub fn infer(program: &Program) -> Types {
     };
     let fields = Fields {
         kind: named("자료형"),
-        count: named("개수"),
-        letters: named("글자수"),
+        length: named("길이"),
+        names: named("명칭"),
     };
     let mut nouns: HashMap<Symbol, Vec<FuncId>> = HashMap::new();
     for module in &program.modules {
@@ -368,12 +366,15 @@ fn visit(
     moved: &mut bool,
 ) {
     match expr {
-        Expr::List(items) | Expr::Template(items) => {
+        Expr::Template(items) => {
             for item in items {
                 visit(types, program, function, item, moved);
             }
         }
-        Expr::Dict(entries) => {
+        Expr::Table(items, entries) => {
+            for item in items {
+                visit(types, program, function, item, moved);
+            }
             for (_, value) in entries {
                 visit(types, program, function, value, moved);
             }

@@ -153,7 +153,7 @@ fn ends_statement(produced: &[Token]) -> bool {
 
 impl Lexer<'_> {
     fn knows(&self, word: &str) -> bool {
-        self.vocab.names.contains(word)
+        self.vocab.names.contains(word) || words::FIELDS.contains(&word)
     }
 
     fn scan_line(&self, chars: &[char], line: usize) -> Result<Vec<Token>> {

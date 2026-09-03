@@ -24,8 +24,7 @@ pub enum Expr {
     Nothing,
     Local(LocalId),
     Global(GlobalId),
-    List(Vec<Expr>),
-    Dict(Vec<(Symbol, Expr)>),
+    Table(Vec<Expr>, Vec<(Symbol, Expr)>),
     Template(Vec<Expr>),
     Field {
         owner: Box<Expr>,
