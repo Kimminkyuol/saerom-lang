@@ -65,6 +65,16 @@ pub enum Expr {
         name: String,
         span: Span,
     },
+    Pick {
+        owner: Box<Expr>,
+        key: Box<Expr>,
+        span: Span,
+    },
+    Spot {
+        owner: Box<Expr>,
+        place: Box<Expr>,
+        span: Span,
+    },
     Call(Box<CallExpr>),
     Passive(Box<PassiveExpr>),
     And {
@@ -87,6 +97,8 @@ impl Expr {
             | Expr::Table { span, .. }
             | Expr::Template { span, .. }
             | Expr::Field { span, .. }
+            | Expr::Pick { span, .. }
+            | Expr::Spot { span, .. }
             | Expr::And { span, .. }
             | Expr::Or { span, .. } => *span,
             Expr::Call(call) => call.span,
@@ -103,9 +115,16 @@ impl Expr {
 }
 
 #[derive(Clone, Debug)]
+pub enum Selector {
+    Name(String),
+    Pick(Expr),
+    Spot(Expr),
+}
+
+#[derive(Clone, Debug)]
 pub struct Target {
     pub root: String,
-    pub fields: Vec<String>,
+    pub fields: Vec<Selector>,
     pub span: Span,
 }
 
@@ -121,6 +140,10 @@ pub enum LoopKind {
     },
     While {
         test: Expr,
+    },
+    Each {
+        variable: String,
+        over: Expr,
     },
 }
 

@@ -130,6 +130,10 @@ fn joined(verb: &str, left: &Expr, right: &Expr) -> Tree {
 
 fn expr_tree(expr: &Expr) -> Tree {
     match expr {
+        Expr::Pick { owner, key, .. } => node("pick", vec![expr_tree(owner), expr_tree(key)]),
+        Expr::Spot { owner, place, .. } => {
+            node("spot", vec![expr_tree(owner), expr_tree(place)])
+        }
         Expr::Literal { value, .. } => leaf(match value {
             Literal::Nothing => "lit nothing".to_string(),
             Literal::Int(found) => format!("lit int {found}"),
@@ -177,7 +181,11 @@ fn expr_tree(expr: &Expr) -> Tree {
 fn target_tree(target: &Target) -> Tree {
     let mut tree = leaf(format!("name {}", target.root));
     for field in &target.fields {
-        tree = node(format!("field {field}"), vec![tree]);
+        tree = match field {
+            crate::ast::Selector::Name(name) => node(format!("field {name}"), vec![tree]),
+            crate::ast::Selector::Pick(key) => node("pick", vec![tree, expr_tree(key)]),
+            crate::ast::Selector::Spot(place) => node("spot", vec![tree, expr_tree(place)]),
+        };
     }
     tree
 }
@@ -225,6 +233,13 @@ fn statement_tree(statement: &Stmt) -> Tree {
             node("if", children)
         }
         Stmt::Loop { kind, body, .. } => match kind {
+            LoopKind::Each { variable, over } => node(
+                format!("each {variable}"),
+                vec![
+                    node("over", vec![expr_tree(over)]),
+                    block_tree("body", body),
+                ],
+            ),
             LoopKind::Range {
                 variable,
                 start,
@@ -341,6 +356,35 @@ fn hir_block(program: &hir::Program, label: &str, body: &[hir::Stmt]) -> Tree {
 fn hir_stmt(program: &hir::Program, statement: &hir::Stmt) -> Tree {
     use hir::Stmt as S;
     match statement {
+        S::SetAt {
+            owner,
+            place,
+            value,
+            ..
+        } => node(
+            "set at",
+            vec![
+                hir_expr(program, owner),
+                hir_expr(program, place),
+                hir_expr(program, value),
+            ],
+        ),
+        S::Each {
+            place, over, body, ..
+        } => node(
+            format!("each {}", place_name(*place)),
+            vec![hir_expr(program, over), hir_block(program, "body", body)],
+        ),
+        S::SetPick {
+            owner, key, value, ..
+        } => node(
+            "set pick",
+            vec![
+                hir_expr(program, owner),
+                hir_expr(program, key),
+                hir_expr(program, value),
+            ],
+        ),
         S::Set { place, value } => node(
             format!("set {}", place_name(*place)),
             vec![hir_expr(program, value)],
@@ -410,6 +454,10 @@ fn hir_stmt(program: &hir::Program, statement: &hir::Stmt) -> Tree {
 fn hir_expr(program: &hir::Program, expr: &hir::Expr) -> Tree {
     use hir::Expr as E;
     match expr {
+        E::Pick { owner, key, .. } => node(
+            "pick",
+            vec![hir_expr(program, owner), hir_expr(program, key)],
+        ),
         E::Int(value) => leaf(format!("int {value}")),
         E::Float(value) => leaf(format!("float {value:?}")),
         E::Str(value) => leaf(format!("str {}", escape(value))),

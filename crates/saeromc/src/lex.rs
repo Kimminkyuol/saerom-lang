@@ -180,7 +180,7 @@ impl Lexer<'_> {
                     j,
                 ));
                 i = j;
-            } else if ".:".contains(ch) {
+            } else if ".:()".contains(ch) {
                 out.push(Token::new(Tok::Symbol(ch), line, i, i + 1));
                 i += 1;
             } else if is_word_char(ch) {
@@ -253,8 +253,11 @@ impl Lexer<'_> {
             {
                 let cut = end - form.chars().count();
                 let head = chunk.strip_suffix(form).unwrap();
+                let again = words::COPULA
+                    .iter()
+                    .any(|&(form, _)| head.strip_suffix(form).is_some_and(words::is_keyword));
                 let rest = Splitting {
-                    take_copula: false,
+                    take_copula: again,
                     ..splitting
                 };
                 let mut out = self.split_word(head, line, col, cut, rest)?;

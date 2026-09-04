@@ -26,6 +26,7 @@ pub fn parse<'a>(
         program,
         base_dir,
         errors: Vec::new(),
+        inside: false,
     };
     let statements = parser.program();
     Parsed {
@@ -40,6 +41,7 @@ struct Parser<'a> {
     program: &'a Program,
     base_dir: Option<&'a Path>,
     errors: Vec<Diag>,
+    inside: bool,
 }
 
 #[derive(Clone)]
@@ -227,7 +229,7 @@ fn starts_value(tok: &Tok) -> bool {
         Tok::Keyword(word) => {
             matches!(word.as_str(), "참" | "거짓" | "없음" | "묶음")
         }
-        Tok::Symbol(ch) => *ch == '[' || *ch == '{',
+        Tok::Symbol(ch) => *ch == '(',
         _ => false,
     }
 }
@@ -244,6 +246,47 @@ fn ending_label(ending: Ending) -> &'static str {
         Ending::Auxiliary => msg::END_AUXILIARY,
         Ending::Negative => "-지",
         Ending::Quotative => "-라는",
+    }
+}
+
+fn join_and(left: Option<Expr>, right: Expr, span: Span) -> Expr {
+    match left {
+        None => right,
+        Some(before) => Expr::And {
+            left: Box::new(before),
+            right: Box::new(right),
+            span,
+        },
+    }
+}
+
+fn join_or(apart: Vec<Expr>, span: Span) -> Expr {
+    apart
+        .into_iter()
+        .reduce(|before, next| Expr::Or {
+            left: Box::new(before),
+            right: Box::new(next),
+            span,
+        })
+        .expect("조건")
+}
+
+fn carry_subject(slots: &mut Vec<Slot>, subject: &mut Option<Expr>) {
+    if !slots.iter().any(|slot| slot.marker == Marker::Case("가")) {
+        if let Some(found) = subject.clone() {
+            slots.insert(
+                0,
+                Slot {
+                    marker: Marker::Case("가"),
+                    expr: found,
+                },
+            );
+        }
+    }
+    for slot in slots.iter() {
+        if slot.marker == Marker::Case("가") {
+            *subject = Some(slot.expr.clone());
+        }
     }
 }
 
@@ -353,43 +396,83 @@ impl<'a> Parser<'a> {
             && self.program.signatures.knows(&format!("{name}이다"))
     }
 
-    fn chain(&mut self, value: Expr) -> Expr {
+    fn chain(&mut self, value: Expr) -> Result<Expr> {
         let mut value = value;
         loop {
             if !matches!(self.peek(), Tok::Particle { canon: "의", .. }) {
-                return value;
-            }
-            let Tok::Name(field) = &self.ahead(1).tok else {
-                return value;
-            };
-            if self.program.modules.contains(field) {
-                return value;
-            }
-            if let Tok::Copula { ending } = self.ahead(2).tok {
-                if ending != Ending::Final {
-                    return value;
-                }
+                return Ok(value);
             }
             let span = self.ahead(1).span;
-            let name = field.clone();
-            self.at += 2;
-            value = Expr::Field {
-                owner: Box::new(value),
-                name,
+            match &self.ahead(1).tok {
+                Tok::Name(field) => {
+                    if self.program.modules.contains(field) {
+                        return Ok(value);
+                    }
+                    if let Tok::Copula { ending } = self.ahead(2).tok {
+                        if ending != Ending::Final {
+                            return Ok(value);
+                        }
+                    }
+                    let name = field.clone();
+                    self.at += 2;
+                    value = Expr::Field {
+                        owner: Box::new(value),
+                        name,
+                        span,
+                    };
+                }
+                Tok::Str(text) => {
+                    let name = text.clone();
+                    self.at += 2;
+                    value = Expr::Field {
+                        owner: Box::new(value),
+                        name,
+                        span,
+                    };
+                }
+                Tok::Symbol('(') => {
+                    self.at += 1;
+                    let key = self.selector()?;
+                    value = self.wrap_selector(value, key, span);
+                }
+                _ => return Ok(value),
+            }
+        }
+    }
+
+    fn selector(&mut self) -> Result<Expr> {
+        let span = self.span();
+        self.at += 1;
+        let key = self.grouped(span)?;
+        self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
+        Ok(key)
+    }
+
+    fn wrap_selector(&mut self, owner: Expr, key: Expr, span: Span) -> Expr {
+        if matches!(self.peek(), Tok::Name(name) if name == "번째") {
+            self.at += 1;
+            return Expr::Spot {
+                owner: Box::new(owner),
+                place: Box::new(key),
                 span,
             };
+        }
+        Expr::Pick {
+            owner: Box::new(owner),
+            key: Box::new(key),
+            span,
         }
     }
 
     fn push(&mut self, slots: &mut Vec<Slot>, first: Expr) -> Result<()> {
-        let mut items = vec![self.chain(first)];
+        let mut items = vec![self.chain(first)?];
         while matches!(self.peek(), Tok::Particle { role: "conj", .. })
             && starts_value(&self.ahead(1).tok)
             && !self.starts_predicate(1)
         {
             self.at += 1;
             let next = self.primary()?;
-            items.push(self.chain(next));
+            items.push(self.chain(next)?);
         }
         let value = if items.len() == 1 {
             items.pop().expect("항 하나")
@@ -575,6 +658,12 @@ impl<'a> Parser<'a> {
                 self.at += 1;
                 Ok(Expr::Name { name, span })
             }
+            Tok::Symbol('(') => {
+                self.at += 1;
+                let value = self.grouped(span)?;
+                self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
+                Ok(value)
+            }
             other => Err(Diag::syntax(msg::not_a_value(&describe(other)), span)),
         }
     }
@@ -618,6 +707,7 @@ impl<'a> Parser<'a> {
             program: self.program,
             base_dir: self.base_dir,
             errors: Vec::new(),
+            inside: false,
         };
         inner.reduce_until(
             |tok| matches!(tok, Tok::Newline | Tok::Eof),
@@ -745,14 +835,21 @@ impl<'a> Parser<'a> {
             }
             return Ok(None);
         };
-        let mut fields = Vec::new();
         let mut index = start + 1;
         while matches!(self.tok_at(index), Tok::Particle { canon: "의", .. }) {
-            let Tok::Name(field) = self.tok_at(index + 1) else {
-                break;
-            };
-            fields.push(field.clone());
-            index += 2;
+            match self.tok_at(index + 1) {
+                Tok::Name(_) | Tok::Str(_) => index += 2,
+                Tok::Symbol('(') => match self.matching(index + 1) {
+                    Some(close) => {
+                        index = close + 1;
+                        if matches!(self.tok_at(index), Tok::Name(name) if name == "번째") {
+                            index += 1;
+                        }
+                    }
+                    None => break,
+                },
+                _ => break,
+            }
         }
         let taken = match self.tok_at(index) {
             Tok::Particle { role: "topic", .. } => true,
@@ -765,12 +862,53 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         let span = self.ahead(0).span;
+        let root = root.clone();
+        self.at = start + 1;
+        let mut fields = Vec::new();
+        while self.at < index {
+            self.at += 1;
+            match self.peek() {
+                Tok::Name(name) => {
+                    fields.push(Selector::Name(name.clone()));
+                    self.at += 1;
+                }
+                Tok::Str(text) => {
+                    fields.push(Selector::Name(text.clone()));
+                    self.at += 1;
+                }
+                _ => {
+                    let key = self.selector()?;
+                    if matches!(self.peek(), Tok::Name(name) if name == "번째") {
+                        self.at += 1;
+                        fields.push(Selector::Spot(key));
+                    } else {
+                        fields.push(Selector::Pick(key));
+                    }
+                }
+            }
+        }
         self.at = index + 1;
-        Ok(Some(Target {
-            root: root.clone(),
-            fields,
-            span,
-        }))
+        Ok(Some(Target { root, fields, span }))
+    }
+
+    fn matching(&self, open: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        let mut index = open;
+        while index < self.tokens.len() {
+            match self.tok_at(index) {
+                Tok::Symbol('(') => depth += 1,
+                Tok::Symbol(')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                Tok::Newline | Tok::Eof => return None,
+                _ => {}
+            }
+            index += 1;
+        }
+        None
     }
 
     fn looks_like_table(&self) -> bool {
@@ -786,24 +924,52 @@ impl<'a> Parser<'a> {
             && matches!(self.tok_at(end - 3), Tok::Keyword(word) if word == "묶음")
     }
 
-    fn table_value(&mut self) -> Result<Expr> {
-        let span = self.span();
+    fn grouped(&mut self, span: Span) -> Result<Expr> {
+        if self.closes_table(')') {
+            return self.table_body(span);
+        }
+        self.reduce_until(
+            |tok| matches!(tok, Tok::Symbol(')') | Tok::Newline),
+            msg::WANT_GROUPED,
+        )
+    }
+
+    fn closes_table(&self, closer: char) -> bool {
+        let mut index = self.at;
+        while index < self.tokens.len() {
+            match self.tok_at(index) {
+                Tok::Symbol(found) if *found == closer => break,
+                Tok::Newline | Tok::Eof => return false,
+                _ => index += 1,
+            }
+        }
+        index > self.at
+            && matches!(self.tok_at(index - 1), Tok::Keyword(word) if word == "묶음")
+    }
+
+    fn table_body(&mut self, span: Span) -> Result<Expr> {
         let mut entries = Vec::new();
         while !self.keyword_at(0, "묶음") {
             entries.push(self.table_entry()?);
         }
         self.at += 1;
+        Ok(Expr::Table {
+            items: Vec::new(),
+            entries,
+            span,
+        })
+    }
+
+    fn table_value(&mut self) -> Result<Expr> {
+        let span = self.span();
+        let made = self.table_body(span)?;
         self.expect(
             &Tok::Copula {
                 ending: Ending::Final,
             },
             msg::WANT_COPULA,
         )?;
-        Ok(Expr::Table {
-            items: Vec::new(),
-            entries,
-            span,
-        })
+        Ok(made)
     }
 
     fn table_entry(&mut self) -> Result<(String, Expr)> {
@@ -871,7 +1037,7 @@ impl<'a> Parser<'a> {
             let mut fields = target.fields.clone();
             let root = match fields.pop() {
                 Some(_) => {
-                    fields.push(name);
+                    fields.push(Selector::Name(name));
                     target.root.clone()
                 }
                 None => name,
@@ -880,20 +1046,85 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn joins_logic(&self, tok: &Tok) -> Option<Ending> {
+        match tok {
+            Tok::Verb {
+                ending: found @ (Ending::Conjunctive | Ending::Alternative),
+                ..
+            } => Some(*found),
+            Tok::Copula {
+                ending: Ending::Alternative,
+            } => Some(Ending::Alternative),
+            Tok::Copula {
+                ending: Ending::Conjunctive,
+            } => {
+                let names_field = matches!(self.ahead(1).tok, Tok::Name(_))
+                    && matches!(self.ahead(2).tok, Tok::Particle { role: "topic", .. });
+                (!names_field).then_some(Ending::Conjunctive)
+            }
+            _ => None,
+        }
+    }
+
+    fn clause(&mut self, slots: Vec<Slot>, info: VerbInfo) -> Expr {
+        let (taken, info) = if info.name == "이다" {
+            fold_comparison(copula_slots(slots), info)
+        } else {
+            (slots, info)
+        };
+        Expr::Call(Box::new(CallExpr {
+            verb: info.name,
+            slots: taken,
+            negated: info.negated,
+            asks: false,
+            tail: None,
+            span: info.span,
+        }))
+    }
+
     fn value_until_copula(&mut self) -> Result<(Expr, bool)> {
         let mut slots: Vec<Slot> = Vec::new();
+        let mut apart: Vec<Expr> = Vec::new();
+        let mut left: Option<Expr> = None;
+        let mut any = false;
+        let mut subject: Option<Expr> = None;
         loop {
             let token = self.ahead(0);
             if let Tok::Copula {
                 ending: ending @ (Ending::Final | Ending::Conjunctive),
             } = token.tok
             {
-                self.at += 1;
-                if slots.len() != 1 {
-                    return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
+                if self.joins_logic(&token.tok).is_none() || ending == Ending::Final {
+                    self.at += 1;
+                    if slots.len() != 1 {
+                        return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
+                    }
+                    let mut value = slots.pop().expect("값 하나").expr;
+                    if left.is_some() || !apart.is_empty() {
+                        if any {
+                            if let Some(done) = left.take() {
+                                apart.push(done);
+                            }
+                        }
+                        value = join_and(left.take(), value, token.span);
+                        apart.push(value);
+                        value = join_or(apart, token.span);
+                    }
+                    return Ok((value, ending == Ending::Conjunctive));
                 }
-                let value = slots.pop().expect("값 하나").expr;
-                return Ok((value, ending == Ending::Conjunctive));
+            }
+            if let Some(found) = self.joins_logic(&token.tok) {
+                let info = self.take_verb()?;
+                carry_subject(&mut slots, &mut subject);
+                let piece = self.clause(std::mem::take(&mut slots), info);
+                if any {
+                    if let Some(done) = left.take() {
+                        apart.push(done);
+                    }
+                }
+                left = Some(join_and(left.take(), piece, token.span));
+                any = found == Ending::Alternative;
+                continue;
             }
             if matches!(token.tok, Tok::Verb { .. } | Tok::Copula { .. }) {
                 let info = self.take_verb()?;
@@ -905,6 +1136,9 @@ impl<'a> Parser<'a> {
                         msg::decl_bad_ending(ending_label(info.ending)),
                         info.span,
                     ));
+                }
+                if info.ending == Ending::Interrogative && !apart.is_empty() || left.is_some() {
+                    carry_subject(&mut slots, &mut subject);
                 }
                 let (value, kept) = self.reduce(slots, info)?;
                 slots = kept;
@@ -944,6 +1178,7 @@ impl<'a> Parser<'a> {
 
     fn condition(&mut self) -> Result<Expr> {
         let mut left: Option<Expr> = None;
+        let mut apart: Vec<Expr> = Vec::new();
         let mut any = false;
         let mut subject: Option<Expr> = None;
         let mut slots: Vec<Slot> = Vec::new();
@@ -1004,13 +1239,13 @@ impl<'a> Parser<'a> {
                 tail: None,
                 span,
             }));
+            if any {
+                if let Some(done) = left.take() {
+                    apart.push(done);
+                }
+            }
             left = Some(match left {
                 None => piece,
-                Some(before) if any => Expr::Or {
-                    left: Box::new(before),
-                    right: Box::new(piece),
-                    span,
-                },
                 Some(before) => Expr::And {
                     left: Box::new(before),
                     right: Box::new(piece),
@@ -1018,7 +1253,17 @@ impl<'a> Parser<'a> {
                 },
             });
             match info.ending {
-                Ending::Conditional => return Ok(left.expect("조건")),
+                Ending::Conditional => {
+                    apart.push(left.take().expect("조건"));
+                    return Ok(apart
+                        .into_iter()
+                        .reduce(|before, next| Expr::Or {
+                            left: Box::new(before),
+                            right: Box::new(next),
+                            span,
+                        })
+                        .expect("조건"));
+                }
                 Ending::Conjunctive => any = false,
                 Ending::Alternative => any = true,
                 other => {
@@ -1031,8 +1276,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn definition_body(&mut self) -> Result<Block> {
+        self.inside = true;
+        let body = self.block();
+        self.inside = false;
+        body
+    }
+
     fn definition(&mut self) -> Result<Stmt> {
         let span = self.span();
+        if self.inside {
+            return Err(Diag::syntax(msg::NESTED_DEFINITION, span));
+        }
         let (head, params) = self.definition_head()?;
         let (thing, thing_span) = self.expect_name()?;
         if thing != "것" {
@@ -1044,7 +1299,7 @@ impl<'a> Parser<'a> {
                 return Err(Diag::syntax(msg::noun_needs_owner(&head), span));
             }
             let owner = params[0].1.clone();
-            let body = self.block()?;
+            let body = self.definition_body()?;
             return Ok(Stmt::Noun {
                 name: head,
                 owner,
@@ -1052,7 +1307,7 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        let body = self.block()?;
+        let body = self.definition_body()?;
         Ok(Stmt::Define {
             name: head,
             params,
@@ -1268,10 +1523,12 @@ impl<'a> Parser<'a> {
 
     fn range_loop(&mut self, slots: Vec<Slot>, span: Span) -> Result<Stmt> {
         let (mut start, mut stop, mut step, mut variable) = (None, None, None, None);
+        let mut over = None;
         for slot in slots {
             match slot.marker {
                 Marker::Case("부터") => start = Some(slot.expr),
                 Marker::Case("까지") => stop = Some(slot.expr),
+                Marker::Case("에서") => over = Some(slot.expr),
                 Marker::Step => step = Some(slot.expr),
                 Marker::Case("마다") => {
                     let Some(name) = slot.expr.as_name() else {
@@ -1285,6 +1542,14 @@ impl<'a> Parser<'a> {
         let Some(variable) = variable else {
             return Err(Diag::syntax(msg::LOOP_NO_EACH, span));
         };
+        if let Some(over) = over {
+            let body = self.block()?;
+            return Ok(Stmt::Loop {
+                kind: LoopKind::Each { variable, over },
+                body,
+                span,
+            });
+        }
         let (Some(start), Some(stop)) = (start, stop) else {
             return Err(Diag::syntax(msg::LOOP_NO_RANGE, span));
         };

@@ -112,6 +112,32 @@ impl Scan {
                 self.expr(function, owner, false);
                 self.expr(function, value, true);
             }
+            Stmt::SetAt {
+                owner,
+                place,
+                value,
+                ..
+            } => {
+                self.expr(function, owner, false);
+                self.expr(function, place, false);
+                self.expr(function, value, true);
+            }
+            Stmt::Each {
+                place, over, body, ..
+            } => {
+                if let Some(key) = key_of(function, *place) {
+                    self.stale.insert(key);
+                }
+                self.expr(function, over, false);
+                self.block(function, body);
+            }
+            Stmt::SetPick {
+                owner, key, value, ..
+            } => {
+                self.expr(function, owner, false);
+                self.expr(function, key, true);
+                self.expr(function, value, true);
+            }
             Stmt::Eval(value) => self.expr(function, value, false),
             Stmt::If {
                 branches,
@@ -179,6 +205,10 @@ impl Scan {
             Expr::Index { owner, place, .. } => {
                 self.expr(function, owner, false);
                 self.expr(function, place, false);
+            }
+            Expr::Pick { owner, key, .. } => {
+                self.expr(function, owner, false);
+                self.expr(function, key, true);
             }
             Expr::Call { callee, args, .. } => {
                 let holds = match callee {

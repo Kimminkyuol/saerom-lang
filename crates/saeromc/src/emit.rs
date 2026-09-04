@@ -174,6 +174,8 @@ declare void @sr_truthy_value(ptr, ptr)
 declare void @sr_table_new(ptr)
 declare void @sr_table_push(ptr, ptr)
 declare i64 @sr_table_len(ptr)
+declare i64 @sr_each_len(ptr)
+declare void @sr_index_set(ptr, ptr, ptr)
 declare void @sr_table_get(ptr, ptr, i64)
 declare void @sr_table_put(ptr, ptr, i64, ptr)
 declare void @sr_push(ptr, ptr)
@@ -181,6 +183,8 @@ declare void @sr_remove_at(ptr, ptr)
 declare void @sr_remove_key(ptr, ptr)
 declare void @sr_template(ptr, ptr, i64)
 declare void @sr_field_get(ptr, ptr, ptr, i64, ptr)
+declare void @sr_pick_get(ptr, ptr, ptr, ptr)
+declare void @sr_pick_set(ptr, ptr, ptr)
 declare void @sr_field_set(ptr, ptr, i64, ptr)
 declare void @sr_index(ptr, ptr, ptr)
 declare void @sr_range(ptr, ptr, ptr, ptr)
@@ -585,6 +589,22 @@ impl<'a> Emitter<'a> {
 
     fn expr(&mut self, expr: &'a Expr) -> Val {
         match expr {
+            Expr::Pick { owner, key, span } => {
+                let owner = self.expr(owner);
+                let owner = self.boxed(owner);
+                let key = self.expr(key);
+                let key = self.boxed(key);
+                let nouns = self.nouns_argument(self.module);
+                let out = self.slot();
+                self.at(*span);
+                self.line(&format!(
+                    "call void @sr_pick_get(ptr {out}, ptr {owner}, ptr {key}, {nouns})"
+                ));
+                Val {
+                    repr: Repr::Boxed,
+                    name: out,
+                }
+            }
             Expr::Int(found) => Val {
                 repr: Repr::Word,
                 name: found.to_string(),
@@ -1021,6 +1041,23 @@ impl<'a> Emitter<'a> {
 impl<'a> Emitter<'a> {
     fn statement(&mut self, statement: &'a Stmt) {
         match statement {
+            Stmt::SetPick {
+                owner,
+                key,
+                value,
+                span,
+            } => {
+                let owner = self.expr(owner);
+                let owner = self.boxed(owner);
+                let key = self.expr(key);
+                let key = self.boxed(key);
+                let value = self.expr(value);
+                let value = self.boxed(value);
+                self.at(*span);
+                self.line(&format!(
+                    "call void @sr_pick_set(ptr {owner}, ptr {key}, ptr {value})"
+                ));
+            }
             Stmt::Set { place, value } => {
                 if self.append_in_place(*place, value) {
                     return;
@@ -1060,6 +1097,29 @@ impl<'a> Emitter<'a> {
                 span,
             } => self.range(*place, start, stop, step.as_ref(), body, *span),
             Stmt::While { test, body } => self.while_loop(test, body),
+            Stmt::SetAt {
+                owner,
+                place,
+                value,
+                span,
+            } => {
+                let owner = self.expr(owner);
+                let owner = self.boxed(owner);
+                let place = self.expr(place);
+                let place = self.boxed(place);
+                let value = self.expr(value);
+                let value = self.boxed(value);
+                self.at(*span);
+                self.line(&format!(
+                    "call void @sr_index_set(ptr {owner}, ptr {place}, ptr {value})"
+                ));
+            }
+            Stmt::Each {
+                place,
+                over,
+                body,
+                span,
+            } => self.each(*place, over, body, *span),
             Stmt::Break | Stmt::Continue => {
                 let Some((step, end)) = self.loops.last().cloned() else {
                     return;
@@ -1172,6 +1232,54 @@ impl<'a> Emitter<'a> {
         ));
         let count = self.temp();
         self.line(&format!("{count} = call i64 @sr_table_len(ptr {list})"));
+        let index = self.raw("i64");
+        self.line(&format!("store i64 0, ptr {index}, align 8"));
+
+        let head = self.label("for");
+        let inside = self.label("body");
+        let next = self.label("next");
+        let end = self.label("endfor");
+        self.line(&format!("br label %{head}"));
+        self.mark(&head);
+        let now = self.temp();
+        self.line(&format!("{now} = load i64, ptr {index}, align 8"));
+        let more = self.temp();
+        self.line(&format!("{more} = icmp slt i64 {now}, {count}"));
+        self.line(&format!("br i1 {more}, label %{inside}, label %{end}"));
+        self.mark(&inside);
+        let item = self.slot();
+        self.line(&format!(
+            "call void @sr_table_get(ptr {item}, ptr {list}, i64 {now})"
+        ));
+        self.write_place(
+            place,
+            Val {
+                repr: Repr::Boxed,
+                name: item,
+            },
+        );
+        self.loops.push((next.clone(), end.clone()));
+        for statement in body {
+            self.statement(statement);
+        }
+        self.loops.pop();
+        self.line(&format!("br label %{next}"));
+        self.mark(&next);
+        let seen = self.temp();
+        self.line(&format!("{seen} = load i64, ptr {index}, align 8"));
+        let bumped = self.temp();
+        self.line(&format!("{bumped} = add i64 {seen}, 1"));
+        self.line(&format!("store i64 {bumped}, ptr {index}, align 8"));
+        self.line(&format!("br label %{head}"));
+        self.mark(&end);
+    }
+
+    fn each(&mut self, place: Place, over: &'a Expr, body: &'a [Stmt], span: Span) {
+        let held = self.expr(over);
+        let list = self.boxed(held);
+        self.at(span);
+        let count = self.temp();
+        self.line(&format!("{count} = call i64 @sr_each_len(ptr {list})"));
         let index = self.raw("i64");
         self.line(&format!("store i64 0, ptr {index}, align 8"));
 

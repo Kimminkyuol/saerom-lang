@@ -38,12 +38,22 @@ impl Frame {
             if let Some(&found) = self.locals.get(name) {
                 return Place::Local(found);
             }
-            let slot = self.count;
-            self.count += 1;
-            self.locals.insert(name.to_string(), slot);
-            return Place::Local(slot);
+            if let Some(&slot) = tables.globals.get(name) {
+                return Place::Global(slot);
+            }
+            return Place::Local(self.bind_local(name));
         }
         Place::Global(global_slot(name, tables, globals))
+    }
+
+    fn bind_local(&mut self, name: &str) -> LocalId {
+        if let Some(&found) = self.locals.get(name) {
+            return found;
+        }
+        let slot = self.count;
+        self.count += 1;
+        self.locals.insert(name.to_string(), slot);
+        slot
     }
 }
 
@@ -126,6 +136,10 @@ fn order_of(loaded: &Loaded) -> Vec<UnitId> {
     }
     walk(loaded, loaded.root, &mut seen, &mut order);
     order
+}
+
+fn spot_of(name: &str) -> Option<&str> {
+    name.strip_suffix("번째").filter(|head| !head.is_empty())
 }
 
 fn same_slots(left: &[Marker], right: &[Marker]) -> bool {
@@ -377,7 +391,7 @@ fn bind_names(statements: &[ASt], into: &mut Vec<String>) {
                     .map(|(target, _)| target.root.clone()),
             ),
             ASt::Loop {
-                kind: LoopKind::Range { variable, .. },
+                kind: LoopKind::Range { variable, .. } | LoopKind::Each { variable, .. },
                 ..
             } => into.push(variable.clone()),
             ASt::Define { .. } | ASt::Noun { .. } => continue,
@@ -391,10 +405,7 @@ fn bind_names(statements: &[ASt], into: &mut Vec<String>) {
 
 impl<'a> Resolver<'a> {
     fn local(&mut self, frame: &mut Frame, name: &str) -> LocalId {
-        match frame.place(name, &mut self.tables[frame.unit], &mut self.globals) {
-            Place::Local(slot) => slot,
-            Place::Global(_) => 0,
-        }
+        frame.bind_local(name)
     }
 
     fn lower_module(&mut self, unit: UnitId) -> Module {
@@ -462,7 +473,7 @@ impl<'a> Resolver<'a> {
             let mut bound = Vec::new();
             bind_names(body, &mut bound);
             for name in bound {
-                self.local(&mut frame, &name);
+                frame.place(&name, &mut self.tables[unit], &mut self.globals);
             }
             let lowered = self.lower_block(&mut frame, body);
             self.functions[index].params = params;
@@ -500,20 +511,73 @@ impl<'a> Resolver<'a> {
                     }
                     let mut owner = self.read_name(frame, &target.root, target.span);
                     for field in &target.fields[..target.fields.len() - 1] {
-                        let field = self.names.intern(field);
-                        owner = Expr::Field {
-                            owner: Box::new(owner),
-                            field,
-                            span: target.span,
+                        owner = match field {
+                            ast::Selector::Name(name) => {
+                                let field = self.names.intern(name);
+                                Expr::Field {
+                                    owner: Box::new(owner),
+                                    field,
+                                    span: target.span,
+                                }
+                            }
+                            ast::Selector::Pick(key) => {
+                                let key = self.lower_expr(frame, key);
+                                Expr::Pick {
+                                    owner: Box::new(owner),
+                                    key: Box::new(key),
+                                    span: target.span,
+                                }
+                            }
+                            ast::Selector::Spot(place) => {
+                                let place = self.lower_expr(frame, place);
+                                Expr::Index {
+                                    owner: Box::new(owner),
+                                    place: Box::new(place),
+                                    span: target.span,
+                                }
+                            }
                         };
                     }
-                    let field = self.names.intern(target.fields.last().expect("필드"));
-                    out.push(Stmt::SetField {
-                        owner,
-                        field,
-                        value,
-                        span: *span,
-                    });
+                    match target.fields.last().expect("필드") {
+                        ast::Selector::Name(name) => match spot_of(name) {
+                            Some(head) => {
+                                let place = self.spot_place(frame, head, target.span);
+                                out.push(Stmt::SetAt {
+                                    owner,
+                                    place,
+                                    value,
+                                    span: *span,
+                                });
+                            }
+                            None => {
+                                let field = self.names.intern(name);
+                                out.push(Stmt::SetField {
+                                    owner,
+                                    field,
+                                    value,
+                                    span: *span,
+                                });
+                            }
+                        },
+                        ast::Selector::Spot(place) => {
+                            let place = self.lower_expr(frame, place);
+                            out.push(Stmt::SetAt {
+                                owner,
+                                place,
+                                value,
+                                span: *span,
+                            });
+                        }
+                        ast::Selector::Pick(key) => {
+                            let key = self.lower_expr(frame, key);
+                            out.push(Stmt::SetPick {
+                                owner,
+                                key,
+                                value,
+                                span: *span,
+                            });
+                        }
+                    }
                 }
             }
             ASt::Exec { calls, .. } => {
@@ -571,6 +635,18 @@ impl<'a> Resolver<'a> {
                     let body = self.lower_block(frame, body);
                     out.push(Stmt::While { test, body });
                 }
+                LoopKind::Each { variable, over } => {
+                    let over = self.lower_expr(frame, over);
+                    let place =
+                        frame.place(variable, &mut self.tables[frame.unit], &mut self.globals);
+                    let body = self.lower_block(frame, body);
+                    out.push(Stmt::Each {
+                        place,
+                        over,
+                        body,
+                        span: *span,
+                    });
+                }
             },
             ASt::Break { .. } => out.push(Stmt::Break),
             ASt::Continue { .. } => out.push(Stmt::Continue),
@@ -602,6 +678,13 @@ impl<'a> Resolver<'a> {
         }
         self.note(frame.unit, error);
         Expr::Nothing
+    }
+
+    fn spot_place(&mut self, frame: &mut Frame, head: &str, span: Span) -> Expr {
+        match head.parse::<i64>() {
+            Ok(found) => Expr::Int(found),
+            Err(_) => self.read_name(frame, head, span),
+        }
     }
 
     fn lower_expr(&mut self, frame: &mut Frame, expr: &'a ast::Expr) -> Expr {
@@ -638,6 +721,24 @@ impl<'a> Resolver<'a> {
             ),
             ast::Expr::Field { owner, name, span } => {
                 self.lower_field(frame, owner, name, *span)
+            }
+            ast::Expr::Pick { owner, key, span } => {
+                let owner = self.lower_expr(frame, owner);
+                let key = self.lower_expr(frame, key);
+                Expr::Pick {
+                    owner: Box::new(owner),
+                    key: Box::new(key),
+                    span: *span,
+                }
+            }
+            ast::Expr::Spot { owner, place, span } => {
+                let owner = self.lower_expr(frame, owner);
+                let place = self.lower_expr(frame, place);
+                Expr::Index {
+                    owner: Box::new(owner),
+                    place: Box::new(place),
+                    span: *span,
+                }
             }
             ast::Expr::Call(call) => self.lower_call(frame, call),
             ast::Expr::Passive(passive) => self.lower_passive(frame, passive),
@@ -683,11 +784,8 @@ impl<'a> Resolver<'a> {
                 return Expr::Nothing;
             }
         }
-        if let Some(head) = name.strip_suffix("번째").filter(|head| !head.is_empty()) {
-            let place = match head.parse::<i64>() {
-                Ok(found) => Expr::Int(found),
-                Err(_) => self.read_name(frame, head, span),
-            };
+        if let Some(head) = spot_of(name) {
+            let place = self.spot_place(frame, head, span);
             let owner = self.lower_expr(frame, owner);
             return Expr::Index {
                 owner: Box::new(owner),
@@ -768,6 +866,24 @@ impl<'a> Resolver<'a> {
             .iter()
             .find(|slot| slot.marker == Marker::Case("를"))
             .map(|slot| &slot.expr);
+        if let Some(ast::Expr::Pick { owner, key, span }) = target {
+            let owner = self.lower_expr(frame, owner);
+            let key = self.lower_expr(frame, key);
+            return Expr::Call {
+                callee: Callee::Op(builtins::Builtin::RemoveKey),
+                args: vec![owner, key],
+                span: *span,
+            };
+        }
+        if let Some(ast::Expr::Spot { owner, place, span }) = target {
+            let owner = self.lower_expr(frame, owner);
+            let place = self.lower_expr(frame, place);
+            return Expr::Call {
+                callee: Callee::Op(builtins::Builtin::RemoveAt),
+                args: vec![owner, place],
+                span: *span,
+            };
+        }
         let Some(ast::Expr::Field { owner, name, span }) = target else {
             self.note(frame.unit, Diag::syntax(msg::REMOVE_NEEDS_FIELD, call.span));
             return Expr::Nothing;

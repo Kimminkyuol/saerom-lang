@@ -36,6 +36,11 @@ pub enum Expr {
         place: Box<Expr>,
         span: Span,
     },
+    Pick {
+        owner: Box<Expr>,
+        key: Box<Expr>,
+        span: Span,
+    },
     Call {
         callee: Callee,
         args: Vec<Expr>,
@@ -67,6 +72,24 @@ pub enum Stmt {
         owner: Expr,
         field: Symbol,
         value: Expr,
+        span: Span,
+    },
+    SetPick {
+        owner: Expr,
+        key: Expr,
+        value: Expr,
+        span: Span,
+    },
+    SetAt {
+        owner: Expr,
+        place: Expr,
+        value: Expr,
+        span: Span,
+    },
+    Each {
+        place: Place,
+        over: Expr,
+        body: Vec<Stmt>,
         span: Span,
     },
     Eval(Expr),

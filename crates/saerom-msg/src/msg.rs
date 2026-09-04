@@ -7,7 +7,6 @@ pub const MODULE: &str = "모듈 오류";
 pub const PARTICLE: &str = "조사 오류";
 pub const VALUE: &str = "값 오류";
 pub const ARITH: &str = "산술 오류";
-pub const FILE: &str = "파일 오류";
 pub const STOP: &str = "종료";
 pub const ERROR: &str = "오류";
 
@@ -44,6 +43,7 @@ pub fn not_number(raw: &str) -> String {
 
 // ── 구문 ────────────────────────────────────────────────────
 
+pub const NESTED_DEFINITION: &str = "올바르지 않은 정의 위치";
 pub const NO_BLOCK: &str = "구문 블록의 들여쓰기 누락";
 pub const NOT_NEGATION: &str = "'-지'에 대응하는 '않다' 누락";
 pub const DECL_NOT_ONE: &str = "선언문에 지정된 표현식이 단일 값이 아님";
@@ -63,7 +63,9 @@ pub const LOOP_NO_EACH: &str = "반복문에 '마다' 누락";
 pub const LOOP_NO_RANGE: &str = "반복문 범위 누락";
 
 pub const WANT_COLON: &str = "':'이";
-pub const WANT_COPULA: &str = "묶음을 닫는 '이다'가";
+pub const WANT_CLOSE: &str = "')'가";
+pub const WANT_GROUPED: &str = "괄호 안의 값이";
+pub const WANT_COPULA: &str = "'이다'가";
 pub const WANT_NEWLINE: &str = "줄바꿈이";
 pub const WANT_PERIOD: &str = "'.'이";
 pub const WANT_EMBEDDED: &str = "삽입된 표현식";
@@ -216,6 +218,10 @@ pub fn not_table(verb: &str, kind: &str) -> String {
     format!("'{verb}'의 대상이 묶음이 아님: {kind}")
 }
 
+pub fn name_not_text(shown: &str) -> String {
+    format!("명칭이 문자열이 아님: {shown}")
+}
+
 pub fn no_field(field: &str) -> String {
     format!("'{field}' 접근할 수 없음")
 }
@@ -258,18 +264,6 @@ pub fn not_bool(name: &str, kind: &str, shown: &str) -> String {
 
 pub fn bad_mode(mode: &str) -> String {
     format!("정의되지 않은 방식: '{mode}'")
-}
-
-pub fn cannot_open(name: &str, why: &str) -> String {
-    format!("'{name}'을 열 수 없음: {why}")
-}
-
-pub fn cannot_read(why: &str) -> String {
-    format!("읽을 수 없음: {why}")
-}
-
-pub fn cannot_write(why: &str) -> String {
-    format!("쓸 수 없음: {why}")
 }
 
 pub fn not_descriptor(verb: &str, shown: &str) -> String {

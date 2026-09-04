@@ -70,7 +70,7 @@ impl Types {
             Expr::Table(..) => Ty::Table,
             Expr::Template(_) => Ty::Str,
             Expr::Field { owner, field, .. } => self.field(function, owner, *field),
-            Expr::Index { .. } => Ty::Any,
+            Expr::Index { .. } | Expr::Pick { .. } => Ty::Any,
             Expr::Call { callee, args, .. } => self.call(function, *callee, args),
             Expr::Not(_) | Expr::Ask { .. } | Expr::And(..) | Expr::Or(..) => Ty::Bool,
         }
@@ -252,7 +252,7 @@ fn blocks(statement: &Stmt) -> Vec<&[Stmt]> {
             found.extend(otherwise.iter().map(Vec::as_slice));
             found
         }
-        Stmt::Range { body, .. } | Stmt::While { body, .. } => {
+        Stmt::Range { body, .. } | Stmt::While { body, .. } | Stmt::Each { body, .. } => {
             vec![body]
         }
         _ => Vec::new(),
@@ -283,6 +283,30 @@ fn walk(
             }
             Stmt::SetField { owner, value, .. } => {
                 visit(types, program, function, owner, moved);
+                visit(types, program, function, value, moved);
+            }
+            Stmt::SetAt {
+                owner,
+                place,
+                value,
+                ..
+            } => {
+                visit(types, program, function, owner, moved);
+                visit(types, program, function, place, moved);
+                visit(types, program, function, value, moved);
+            }
+            Stmt::Each {
+                place, over, body, ..
+            } => {
+                assign(types, function, *place, Ty::Any, moved);
+                visit(types, program, function, over, moved);
+                walk(types, program, function, body, moved);
+            }
+            Stmt::SetPick {
+                owner, key, value, ..
+            } => {
+                visit(types, program, function, owner, moved);
+                visit(types, program, function, key, moved);
                 visit(types, program, function, value, moved);
             }
             Stmt::Eval(value) => visit(types, program, function, value, moved),
@@ -394,6 +418,10 @@ fn visit(
         Expr::Index { owner, place, .. } => {
             visit(types, program, function, owner, moved);
             visit(types, program, function, place, moved);
+        }
+        Expr::Pick { owner, key, .. } => {
+            visit(types, program, function, owner, moved);
+            visit(types, program, function, key, moved);
         }
         Expr::Not(inner) | Expr::Ask { value: inner, .. } => {
             visit(types, program, function, inner, moved)

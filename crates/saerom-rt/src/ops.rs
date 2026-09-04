@@ -397,6 +397,34 @@ pub unsafe extern "C" fn sr_field_get(
     fail(msg::NAME, msg::no_field_on(owner.kind(), field));
 }
 
+fn key_text(key: &Value) -> &'static str {
+    if key.tag != STR {
+        fail(msg::VALUE, msg::name_not_text(&show(key)));
+    }
+    key.as_text()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_pick_get(
+    out: *mut Value,
+    owner: *const Value,
+    key: *const Value,
+    nouns: Nouns,
+) {
+    let name = key_text(at(key));
+    sr_field_get(out, owner, name.as_ptr(), name.len(), nouns);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_pick_set(
+    owner: *const Value,
+    key: *const Value,
+    value: *const Value,
+) {
+    let name = key_text(at(key));
+    sr_field_set(owner, name.as_ptr(), name.len(), value);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sr_field_set(
     owner: *const Value,
@@ -675,6 +703,37 @@ pub unsafe extern "C" fn sr_name_is(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn sr_each_len(found: *const Value) -> i64 {
+    let found = at(found);
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("반복하다", found.kind()));
+    }
+    found.as_table().items.len() as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_index_set(
+    owner: *const Value,
+    place: *const Value,
+    value: *const Value,
+) {
+    let owner = at(owner);
+    let place = at(place);
+    if owner.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("자리", owner.kind()));
+    }
+    if place.tag != INT {
+        fail(msg::VALUE, msg::place_not_int(&to_text(place)));
+    }
+    let index = place.as_int();
+    let held = owner.as_table();
+    if index < 1 || index as usize > held.items.len() {
+        fail(msg::VALUE, msg::out_of_range(index, held.items.len()));
+    }
+    held.items[index as usize - 1] = *at(value);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sr_table_len(found: *const Value) -> i64 {
     at(found).as_table().items.len() as i64
 }
@@ -752,7 +811,7 @@ pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *cons
             use std::os::unix::io::IntoRawFd;
             Value::int(file.into_raw_fd() as i64)
         }
-        Err(error) => fail(msg::FILE, msg::cannot_open(&name, &error.to_string())),
+        Err(_) => Value::int(-1),
     };
 }
 
@@ -772,9 +831,7 @@ pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *co
     flush_out();
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
     let mut buffer = vec![0u8; want];
-    let read = held.read(&mut buffer).unwrap_or_else(|error| {
-        fail(msg::FILE, msg::cannot_read(&error.to_string()));
-    });
+    let read = held.read(&mut buffer).unwrap_or(0);
     buffer.truncate(read);
     *out = Value::text(String::from_utf8_lossy(&buffer).into_owned());
 }
@@ -788,11 +845,12 @@ pub unsafe extern "C" fn sr_write(out: *mut Value, file: *const Value, text: *co
     }
     let body = to_text(at(text));
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
-    let written = held.write(body.as_bytes()).unwrap_or_else(|error| {
-        fail(msg::FILE, msg::cannot_write(&error.to_string()));
-    });
+    let written = held.write(body.as_bytes());
     let _ = held.flush();
-    *out = Value::int(written as i64);
+    *out = match written {
+        Ok(count) => Value::int(count as i64),
+        Err(_) => Value::int(-1),
+    };
 }
 
 #[no_mangle]

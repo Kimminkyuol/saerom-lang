@@ -152,6 +152,7 @@ impl Value {
 
     pub fn type_name(&self) -> &'static str {
         match self.tag {
+            NOTHING => "없음",
             BOOL => "논리값",
             INT => "정수",
             FLOAT => "실수",
