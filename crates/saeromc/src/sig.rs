@@ -77,6 +77,17 @@ impl Signatures {
         self.0.get(verb).map_or(&[], Vec::as_slice)
     }
 
+    // 내장 이름은 예약이다. 사용자 정의가 이기면 `3에 4를 더한 값`이 조용히
+    // 남의 함수로 간다. 시그니처가 달라도 막는다 — 제거하다처럼 이름만으로
+    // 특수 하강되는 것이 있어 시그니처 비교로는 새는 구멍이 남는다.
+    pub fn reserved(verb: &str) -> bool {
+        static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        NAMES
+            .get_or_init(|| Signatures::builtin().0.keys().cloned().collect())
+            .iter()
+            .any(|name| name == verb)
+    }
+
     pub fn knows(&self, verb: &str) -> bool {
         self.0.contains_key(verb)
     }

@@ -99,7 +99,7 @@ pub const COMPARATIVES: &[(&str, &str, bool)] = &[
     ("미만", "작다", false),
 ];
 
-pub const CALL_TAILS: &[&str] = &["값", "나머지"];
+pub const CALL_TAILS: &[&str] = &["값", "나머지", "몫"];
 
 pub fn is_keyword(word: &str) -> bool {
     KEYWORDS.contains(&word)
@@ -236,7 +236,9 @@ pub fn stem_forms<'a>(stems: impl IntoIterator<Item = &'a String>) -> FormTable 
     for stem in sorted {
         let name = format!("{stem}다");
         for &ending in &REGULAR_ENDINGS {
-            if let Some(surface) = conjugate(stem, Pos::Verb, ending) {
+            let regular = conjugate(stem, Pos::Verb, ending);
+            let odd = crate::hangul::irregular(stem, ending);
+            for surface in regular.into_iter().chain(odd) {
                 table
                     .entry(surface)
                     .or_insert((name.clone(), Pos::Verb, ending));

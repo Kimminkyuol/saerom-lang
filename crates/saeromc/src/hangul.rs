@@ -139,6 +139,38 @@ pub fn conjugate(stem: &str, pos: Pos, ending: Ending) -> Option<String> {
     })
 }
 
+// ㅅ/ㄷ/ㅂ 불규칙 대체형. 어간이 불규칙인지 알 수 없으니 둘 다 받아 준다.
+pub fn irregular(stem: &str, ending: Ending) -> Option<String> {
+    let last = stem.chars().last()?;
+    let head = &stem[..stem.len() - last.len_utf8()];
+    let (onset, vowel, coda) = decompose(last)?;
+    let bare = compose(onset, vowel, None);
+    let bright = matches!(vowel, 'ㅏ' | 'ㅗ');
+    Some(match (coda?, ending) {
+        // 짓 → 지은 / 지으면 / 지어
+        ('ㅅ', Ending::AdnominalPast) => format!("{head}{bare}은"),
+        ('ㅅ', Ending::Conditional) => format!("{head}{bare}으면"),
+        ('ㅅ', Ending::Auxiliary) => {
+            format!("{head}{bare}{}", if bright { "아" } else { "어" })
+        }
+        // 듣 → 들은 / 들으면 / 들어
+        ('ㄷ', Ending::AdnominalPast) => format!("{head}{}은", add_coda(bare, 'ㄹ')),
+        ('ㄷ', Ending::Conditional) => format!("{head}{}으면", add_coda(bare, 'ㄹ')),
+        ('ㄷ', Ending::Auxiliary) => {
+            format!("{head}{}{}", add_coda(bare, 'ㄹ'), if bright { "아" } else { "어" })
+        }
+        // 돕 → 도운 / 도우면 / 도와
+        ('ㅂ', Ending::AdnominalPast) => {
+            format!("{head}{bare}{}", add_coda('우', 'ㄴ'))
+        }
+        ('ㅂ', Ending::Conditional) => format!("{head}{bare}우면"),
+        ('ㅂ', Ending::Auxiliary) => {
+            format!("{head}{bare}{}", if bright { "와" } else { "워" })
+        }
+        _ => return None,
+    })
+}
+
 fn auxiliary(stem: &str, head: &str, last: char) -> Option<String> {
     if last == '하' {
         return Some(format!("{head}해"));

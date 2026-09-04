@@ -65,6 +65,15 @@ pub struct Vocabulary {
 }
 
 impl Vocabulary {
+    // 이름이 어떤 동사의 활용형과 같은지. split_word 에서 이름이 이기므로,
+    // 겹치면 그 동사가 파일 전체에서 조용히 사라진다.
+    pub fn verb_named(&self, word: &str) -> Option<&str> {
+        words::builtin_forms()
+            .get(word)
+            .or_else(|| self.forms.get(word))
+            .map(|(name, _, _)| name.as_str())
+    }
+
     pub fn new(names: HashSet<String>, stems: HashSet<String>) -> Self {
         let forms = words::stem_forms(&stems);
         Vocabulary {
@@ -97,6 +106,7 @@ pub fn tokenize(source: &str, vocab: &Vocabulary) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut indents = vec![0usize];
     let mut at_statement_start = true;
+    let mut statement_indent = 0usize;
 
     for (index, text) in lines.iter().enumerate() {
         let line = index + 1;
@@ -105,7 +115,13 @@ pub fn tokenize(source: &str, vocab: &Vocabulary) -> Result<Vec<Token>> {
         if chars[depth..].is_empty() || chars[depth] == '#' {
             continue;
         }
+        if !at_statement_start && depth <= statement_indent {
+            // 마침표를 빠뜨리면 다음 줄이 통째로 앞 문장에 붙어, 오류가 한참
+            // 뒤에서 엉뚱한 것을 가리킨다. 이어지는 줄은 더 깊게 들여쓴다.
+            return Err(Diag::lex(msg::MISSING_PERIOD, Span::new(line, 0, depth)));
+        }
         if at_statement_start {
+            statement_indent = depth;
             if depth > *indents.last().unwrap() {
                 indents.push(depth);
                 tokens.push(Token::new(Tok::Indent(depth), line, 0, depth));

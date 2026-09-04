@@ -118,7 +118,9 @@ impl Types {
             },
             Builtin::Push | Builtin::RemoveAt | Builtin::RemoveKey => Ty::Nothing,
             Builtin::Sub | Builtin::Mul | Builtin::Rem => arithmetic(arg(0), arg(1)),
-            Builtin::Div => Ty::Any,
+            // 나누다는 늘 실수. 몫은 정수끼리면 정수.
+            Builtin::Div => Ty::Float,
+            Builtin::Quot => arithmetic(arg(0), arg(1)),
         }
     }
 
@@ -179,7 +181,10 @@ pub fn infer(program: &Program) -> Types {
             types.returns[id] = Ty::Nothing;
         }
     }
-    for _ in 0..64 {
+    // 격자 높이가 3(Never ⊑ 구체 ⊑ Any)이고 갱신이 모두 join 이라 반드시 멎는다.
+    // 반복 상한을 두면 고정점에 못 닿은 채 좁은 타입이 남아 코드 생성이 잘못된 표현으로
+    // 언박싱한다. 상한을 두지 않는 것이 건전성의 조건이다.
+    loop {
         let mut moved = false;
         for module in &program.modules {
             walk(&mut types, program, None, &module.init, &mut moved);

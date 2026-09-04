@@ -1,4 +1,5 @@
-pub mod ast;
+mod assign;
+mod ast;
 pub mod builtins;
 pub mod diag;
 pub mod dump;

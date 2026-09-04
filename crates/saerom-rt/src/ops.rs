@@ -70,6 +70,28 @@ pub static mut SR_AT: [u64; FRAMES] = [0; FRAMES];
 #[no_mangle]
 pub static mut SR_DEPTH: u32 = 0;
 
+// 스택 가드. 되돌이가 깊어지면 세그폴트 대신 한국어 오류로 끝낸다.
+// 바닥은 main 들머리의 주소에서 예산만큼 뺀 값이다.
+static mut STACK_FLOOR: usize = 0;
+const STACK_BUDGET: usize = 6 << 20;
+
+fn here() -> usize {
+    let probe = 0u8;
+    std::hint::black_box(&probe) as *const u8 as usize
+}
+
+#[no_mangle]
+pub extern "C" fn sr_stack_base() {
+    unsafe { STACK_FLOOR = here().saturating_sub(STACK_BUDGET) };
+}
+
+#[no_mangle]
+pub extern "C" fn sr_stack_check() {
+    if here() < unsafe { std::ptr::read(&raw const STACK_FLOOR) } {
+        fail(msg::VALUE, msg::STACK_DEEP.to_string());
+    }
+}
+
 struct Spot {
     path: &'static str,
     text: &'static str,
@@ -202,6 +224,22 @@ pub unsafe extern "C" fn sr_str(out: *mut Value, bytes: *const u8, len: usize) {
     *out = Value::text(name_of(bytes, len).to_string());
 }
 
+// 리터럴은 부를 때마다 힙에 복사할 이유가 없다. 자리마다 한 번만 만든다.
+// 제자리 잇기(sr_append)가 닿는 슬롯에는 emit 이 이 길을 쓰지 않는다.
+#[no_mangle]
+pub unsafe extern "C" fn sr_str_kept(
+    out: *mut Value,
+    cache: *mut Value,
+    bytes: *const u8,
+    len: usize,
+) {
+    let held = &mut *cache;
+    if held.tag != STR {
+        *held = Value::text(name_of(bytes, len).to_string());
+    }
+    *out = *held;
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sr_copy(dst: *mut Value, src: *const Value) {
     *dst = *src;
@@ -271,6 +309,16 @@ pub unsafe extern "C" fn sr_remove_key(table: *const Value, key: *const Value) {
     }
 }
 
+// 부린 뒤 바로 버려도 되는 임시값만 여기로 온다 (emit 이 판단).
+#[no_mangle]
+pub unsafe extern "C" fn sr_drop(value: *mut Value) {
+    let held = &mut *value;
+    if held.tag == STR {
+        drop(Box::from_raw(held.bits as *mut String));
+    }
+    *held = Value::nothing();
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sr_template(out: *mut Value, parts: *const Value, count: usize) {
     let mut text = String::new();
@@ -335,10 +383,7 @@ fn at_index(found: &Value, index: usize) -> Value {
     match found.tag {
         TABLE => found.as_table().items[index],
         _ => Value::text(
-            found
-                .as_text()
-                .chars()
-                .nth(index)
+            crate::text::char_at(found.as_text(), index)
                 .expect("글자")
                 .to_string(),
         ),
@@ -378,7 +423,7 @@ pub unsafe extern "C" fn sr_field_get(
     if field == "길이" {
         let size = match owner.tag {
             TABLE => Some(owner.as_table().items.len()),
-            STR => Some(owner.as_text().chars().count()),
+            STR => Some(crate::text::char_len(owner.as_text())),
             _ => None,
         };
         if let Some(size) = size {
@@ -449,7 +494,7 @@ pub unsafe extern "C" fn sr_index(out: *mut Value, owner: *const Value, place: *
     }
     let size = match owner.tag {
         TABLE => owner.as_table().items.len(),
-        STR => owner.as_text().chars().count(),
+        STR => crate::text::char_len(owner.as_text()),
         _ => {
             fail(msg::NAME, msg::no_place(owner.kind()));
         }
@@ -466,12 +511,16 @@ fn arith(
     out: *mut Value,
     left: &Value,
     right: &Value,
-    whole: fn(i64, i64) -> i64,
+    whole: fn(i64, i64) -> Option<i64>,
     real: fn(f64, f64) -> f64,
 ) {
     numbers(verb, [left, right]);
     let made = if both_int(left, right) {
-        Value::int(whole(left.as_int(), right.as_int()))
+        // 조용한 랩어라운드 대신 멈춘다.
+        match whole(left.as_int(), right.as_int()) {
+            Some(found) => Value::int(found),
+            None => fail(msg::ARITH, msg::overflow(verb)),
+        }
     } else {
         Value::float(real(left.number_value(), right.number_value()))
     };
@@ -514,7 +563,7 @@ pub unsafe extern "C" fn sr_add(out: *mut Value, left: *const Value, right: *con
         out,
         left,
         right,
-        |a, b| a.wrapping_add(b),
+        |a, b| a.checked_add(b),
         |a, b| a + b,
     );
 }
@@ -526,7 +575,7 @@ pub unsafe extern "C" fn sr_sub(out: *mut Value, left: *const Value, right: *con
         out,
         at(left),
         at(right),
-        |a, b| a.wrapping_sub(b),
+        |a, b| a.checked_sub(b),
         |a, b| a - b,
     );
 }
@@ -538,7 +587,7 @@ pub unsafe extern "C" fn sr_mul(out: *mut Value, left: *const Value, right: *con
         out,
         at(left),
         at(right),
-        |a, b| a.wrapping_mul(b),
+        |a, b| a.checked_mul(b),
         |a, b| a * b,
     );
 }
@@ -554,13 +603,40 @@ fn divisor(left: &Value, right: &Value) -> (f64, f64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_div(out: *mut Value, left: *const Value, right: *const Value) {
+    // 늘 실수. 나누어 떨어지는지에 따라 갈래가 바뀌면 타입이 값에 매인다.
     let (a, b) = divisor(at(left), at(right));
-    let made = a / b;
-    *out = if made == made.trunc() && made.abs() < 9.2e18 {
-        Value::int(made as i64)
+    *out = Value::float(a / b);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_quot(out: *mut Value, left: *const Value, right: *const Value) {
+    let (left, right) = (at(left), at(right));
+    if both_int(left, right) {
+        *out = Value::int(sr_quot_int(left.as_int(), right.as_int()));
+        return;
+    }
+    let (a, b) = divisor(left, right);
+    *out = Value::float((a / b).floor());
+}
+
+// 나머지가 몫에 맞물리도록 내림 나눗셈을 쓴다.
+#[no_mangle]
+pub extern "C" fn sr_quot_int(left: i64, right: i64) -> i64 {
+    if right == 0 {
+        fail(msg::ARITH, msg::DIV_ZERO.to_string());
+    }
+    let made = left.wrapping_div(right);
+    let rest = left.wrapping_rem(right);
+    if rest != 0 && (rest < 0) != (right < 0) {
+        made - 1
     } else {
-        Value::float(made)
-    };
+        made
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_overflow(bytes: *const u8, len: usize) -> ! {
+    fail(msg::ARITH, msg::overflow(name_of(bytes, len)))
 }
 
 #[no_mangle]

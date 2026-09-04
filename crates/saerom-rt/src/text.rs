@@ -1,3 +1,5 @@
+use std::cell::UnsafeCell;
+
 use crate::value::{Value, BOOL, FLOAT, INT, STR, TABLE};
 
 pub fn to_text(value: &Value) -> String {
@@ -78,4 +80,73 @@ fn trim(shown: &str) -> String {
         .trim_end_matches('0')
         .trim_end_matches('.')
         .to_string()
+}
+
+// 글자 단위 색인 커서. UTF-8 을 그대로 두는 대신 마지막으로 짚은 자리를
+// 하나만 기억한다. `1부터 길이까지` 앞으로 훑는 고리가 O(n^2) → O(n) 이 된다.
+struct Cursor {
+    ptr: *const u8,
+    bytes: usize,
+    count: usize,
+    at: usize,
+    off: usize,
+}
+
+struct Slot(UnsafeCell<Cursor>);
+unsafe impl Sync for Slot {}
+
+static CURSOR: Slot = Slot(UnsafeCell::new(Cursor {
+    ptr: std::ptr::null(),
+    bytes: 0,
+    count: 0,
+    at: 0,
+    off: 0,
+}));
+
+fn cursor(text: &str) -> &'static mut Cursor {
+    // 런타임은 홀실이라 갈래 다툼이 없다.
+    let held = unsafe { &mut *CURSOR.0.get() };
+    if held.ptr != text.as_ptr() || held.bytes != text.len() {
+        *held = Cursor {
+            ptr: text.as_ptr(),
+            bytes: text.len(),
+            count: text.chars().count(),
+            at: 0,
+            off: 0,
+        };
+    }
+    held
+}
+
+pub fn char_len(text: &str) -> usize {
+    cursor(text).count
+}
+
+pub fn char_at(text: &str, index: usize) -> Option<char> {
+    let held = cursor(text);
+    if index >= held.count {
+        return None;
+    }
+    if held.count == held.bytes {
+        return text.as_bytes().get(index).map(|&byte| byte as char);
+    }
+    if index < held.at {
+        held.at = 0;
+        held.off = 0;
+    }
+    let bytes = text.as_bytes();
+    while held.at < index {
+        held.off += width(bytes[held.off]);
+        held.at += 1;
+    }
+    text[held.off..].chars().next()
+}
+
+fn width(lead: u8) -> usize {
+    match lead {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        _ => 4,
+    }
 }

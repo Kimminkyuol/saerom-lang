@@ -91,6 +91,8 @@ struct Emitter<'a> {
     marked: Option<u64>,
     sites: String,
     site_count: u32,
+    cached: std::collections::HashSet<String>,
+    mutable_str: bool,
     module: ModuleId,
     current: Option<FuncId>,
     frames: bool,
@@ -148,6 +150,7 @@ fn operation(op: Builtin) -> Op {
         Builtin::Mul => value("sr_mul", 2),
         Builtin::Div => value("sr_div", 2),
         Builtin::Rem => value("sr_rem", 2),
+        Builtin::Quot => value("sr_quot", 2),
         Builtin::Greater => value("sr_greater", 2),
         Builtin::Less => value("sr_less", 2),
         Builtin::Equal => value("sr_equal", 2),
@@ -168,6 +171,7 @@ declare void @sr_int(ptr, i64)
 declare void @sr_float(ptr, double)
 declare void @sr_bool(ptr, i8)
 declare void @sr_str(ptr, ptr, i64)
+declare void @sr_str_kept(ptr, ptr, ptr, i64)
 declare void @sr_copy(ptr, ptr)
 declare i8 @sr_truthy(ptr)
 declare void @sr_truthy_value(ptr, ptr)
@@ -196,6 +200,12 @@ declare void @sr_sub(ptr, ptr, ptr)
 declare void @sr_mul(ptr, ptr, ptr)
 declare void @sr_div(ptr, ptr, ptr)
 declare void @sr_rem(ptr, ptr, ptr)
+declare void @sr_quot(ptr, ptr, ptr)
+declare i64 @sr_quot_int(i64, i64)
+declare void @sr_overflow(ptr, i64)
+declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
+declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)
+declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
 declare i64 @sr_rem_int(i64, i64)
 declare double @sr_rem_real(double, double)
 declare void @sr_greater(ptr, ptr, ptr)
@@ -212,6 +222,9 @@ declare void @sr_close(ptr)
 declare void @sr_stop(ptr)
 declare void @sr_clone(ptr, ptr)
 declare void @sr_finish()
+declare void @sr_drop(ptr)
+declare void @sr_stack_base()
+declare void @sr_stack_check()
 declare void @sr_sources(ptr, i64, i8)
 @SR_POS = external global i64
 @SR_FRAMES = external global [1024 x ptr]
@@ -236,6 +249,8 @@ impl<'a> Emitter<'a> {
             marked: None,
             sites: String::new(),
             site_count: 0,
+            cached: std::collections::HashSet::new(),
+            mutable_str: false,
             module: 0,
             current: None,
             frames: false,
@@ -289,6 +304,21 @@ impl<'a> Emitter<'a> {
         );
         self.strings.insert(text.to_string(), name.clone());
         (name, len)
+    }
+
+    // 제자리 잇기가 닿는 자리면 캐시를 쓰지 않는다 (그 상자를 고쳐 쓰므로).
+    fn cached_str(&mut self, constant: &str) -> Option<String> {
+        if self.mutable_str {
+            return None;
+        }
+        let name = format!("@.v{}", &constant[3..]);
+        if self.cached.insert(name.clone()) {
+            let _ = writeln!(
+                self.constants,
+                "{name} = internal global %Value zeroinitializer"
+            );
+        }
+        Some(name)
     }
 
     fn type_of(&self, expr: &Expr) -> Ty {
@@ -628,9 +658,14 @@ impl<'a> Emitter<'a> {
             Expr::Str(found) => {
                 let out = self.slot();
                 let (name, len) = self.constant(found);
-                self.line(&format!(
-                    "call void @sr_str(ptr {out}, ptr {name}, i64 {len})"
-                ));
+                match self.cached_str(&name) {
+                    Some(cache) => self.line(&format!(
+                        "call void @sr_str_kept(ptr {out}, ptr {cache}, ptr {name}, i64 {len})"
+                    )),
+                    None => self.line(&format!(
+                        "call void @sr_str(ptr {out}, ptr {name}, i64 {len})"
+                    )),
+                }
                 Val {
                     repr: Repr::Boxed,
                     name: out,
@@ -831,7 +866,34 @@ impl<'a> Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    fn inline_op(&mut self, op: Builtin, args: &'a [Expr]) -> Option<Val> {
+    // i64 산술은 조용히 감기지 않는다. 넘치면 그 자리에서 멈춘다.
+    fn overflowed(&mut self, whole_op: &str, a: &str, b: &str, span: Span) -> String {
+        let (intrinsic, verb) = match whole_op {
+            "add" => ("sadd", "더하다"),
+            "sub" => ("ssub", "빼다"),
+            _ => ("smul", "곱하다"),
+        };
+        let pair = self.temp();
+        self.line(&format!(
+            "{pair} = call {{i64, i1}} @llvm.{intrinsic}.with.overflow.i64(i64 {a}, i64 {b})"
+        ));
+        let out = self.temp();
+        self.line(&format!("{out} = extractvalue {{i64, i1}} {pair}, 0"));
+        let over = self.temp();
+        self.line(&format!("{over} = extractvalue {{i64, i1}} {pair}, 1"));
+        let trap = self.label("overflow");
+        let ok = self.label("inbounds");
+        self.line(&format!("br i1 {over}, label %{trap}, label %{ok}"));
+        self.mark(&trap);
+        self.at(span);
+        let (name, len) = self.constant(verb);
+        self.line(&format!("call void @sr_overflow(ptr {name}, i64 {len})"));
+        self.line(&format!("br label %{ok}"));
+        self.mark(&ok);
+        out
+    }
+
+    fn inline_op(&mut self, op: Builtin, args: &'a [Expr], span: Span) -> Option<Val> {
         if args.len() != 2 {
             if op == Builtin::Truthy && args.len() == 1 && self.type_of(&args[0]) == Ty::Bool {
                 return Some(self.expr(&args[0]));
@@ -843,12 +905,13 @@ impl<'a> Emitter<'a> {
         let whole = left == Ty::Int && right == Ty::Int;
         let real = left.number() && right.number() && !whole;
 
-        if op == Builtin::Rem && (whole || real) {
-            let (kind, symbol) = if whole {
-                (Repr::Word, "sr_rem_int")
-            } else {
-                (Repr::Real, "sr_rem_real")
-            };
+        let direct = match op {
+            Builtin::Rem if whole => Some((Repr::Word, "sr_rem_int")),
+            Builtin::Rem if real => Some((Repr::Real, "sr_rem_real")),
+            Builtin::Quot if whole => Some((Repr::Word, "sr_quot_int")),
+            _ => None,
+        };
+        if let Some((kind, symbol)) = direct {
             let a = self.value(&args[0], kind);
             let b = self.value(&args[1], kind);
             let out = self.temp();
@@ -870,8 +933,7 @@ impl<'a> Emitter<'a> {
             if whole {
                 let a = self.value(&args[0], Repr::Word);
                 let b = self.value(&args[1], Repr::Word);
-                let out = self.temp();
-                self.line(&format!("{out} = {whole_op} i64 {a}, {b}"));
+                let out = self.overflowed(whole_op, &a, &b, span);
                 return Some(Val {
                     repr: Repr::Word,
                     name: out,
@@ -926,7 +988,7 @@ impl<'a> Emitter<'a> {
 
     fn call(&mut self, callee: Callee, args: &'a [Expr], span: Span) -> Val {
         if let Callee::Op(op) = callee {
-            if let Some(found) = self.inline_op(op, args) {
+            if let Some(found) = self.inline_op(op, args, span) {
                 return found;
             }
         }
@@ -967,6 +1029,15 @@ impl<'a> Emitter<'a> {
             found.symbol,
             passed.join(", ")
         ));
+        // 보간 문자열은 늘 새로 만들어진다. 값을 쥐지 않는 내장에 바로 넘긴
+        // 것이면 아무도 가리키지 않으므로 그 자리에서 놓아준다.
+        if op != Builtin::Push {
+            for (index, arg) in args.iter().enumerate().take(found.arity) {
+                if matches!(arg, Expr::Template(_)) {
+                    self.line(&format!("call void @sr_drop(ptr {})", given[index]));
+                }
+            }
+        }
         Val {
             repr: Repr::Boxed,
             name: out,
@@ -1062,7 +1133,9 @@ impl<'a> Emitter<'a> {
                 if self.append_in_place(*place, value) {
                     return;
                 }
+                self.mutable_str = self.reuse.allows(self.current, *place);
                 let value = self.expr(value);
+                self.mutable_str = false;
                 self.write_place(*place, value);
             }
             Stmt::SetField {
@@ -1547,6 +1620,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn function(&mut self, id: FuncId, function: &'a Function) {
+
         self.open(function.module);
         self.current = Some(id);
         let (ret, params) = self.signature(id);
@@ -1568,6 +1642,10 @@ impl<'a> Emitter<'a> {
         }
         if ret == Repr::Boxed {
             let _ = writeln!(prologue, "  call void @sr_nothing(ptr %out)");
+        }
+        // 잎 함수는 자기를 다시 못 부르니 검사도 필요 없다.
+        if calls_user(&function.body) {
+            let _ = writeln!(prologue, "  call void @sr_stack_check()");
         }
         for (index, slot) in function.params.iter().enumerate() {
             let repr = params[index];
@@ -1654,6 +1732,7 @@ impl<'a> Emitter<'a> {
         out.push('\n');
         out.push_str(&self.functions);
         let _ = writeln!(out, "define i32 @main() {{\nentry:");
+        let _ = writeln!(out, "  call void @sr_stack_base()");
         let _ = writeln!(
             out,
             "  call void @sr_sources(ptr @sources, i64 {count}, i8 {traced})"
@@ -1664,5 +1743,69 @@ impl<'a> Emitter<'a> {
         let _ = writeln!(out, "  call void @sr_finish()");
         let _ = writeln!(out, "  ret i32 0\n}}");
         out
+    }
+}
+
+fn calls_user(body: &[Stmt]) -> bool {
+    fn in_expr(expr: &Expr) -> bool {
+        match expr {
+            Expr::Call { callee, args, .. } => {
+                matches!(callee, Callee::User(_)) || args.iter().any(in_expr)
+            }
+            Expr::Field { owner, .. } => in_expr(owner),
+            Expr::Index { owner, place, .. } => in_expr(owner) || in_expr(place),
+            Expr::Pick { owner, key, .. } => in_expr(owner) || in_expr(key),
+            Expr::Template(items) => items.iter().any(in_expr),
+            Expr::Table(items, entries) => {
+                items.iter().any(in_expr) || entries.iter().any(|(_, value)| in_expr(value))
+            }
+            Expr::Not(inner) | Expr::Ask { value: inner, .. } => in_expr(inner),
+            Expr::And(left, right) | Expr::Or(left, right) => in_expr(left) || in_expr(right),
+            _ => false,
+        }
+    }
+    fn in_stmt(statement: &Stmt) -> bool {
+        let here = match statement {
+            Stmt::Set { value, .. } | Stmt::Eval(value) | Stmt::Return { value, .. } => {
+                in_expr(value)
+            }
+            Stmt::SetField { owner, value, .. } => in_expr(owner) || in_expr(value),
+            Stmt::SetPick {
+                owner, key, value, ..
+            } => in_expr(owner) || in_expr(key) || in_expr(value),
+            Stmt::SetAt {
+                owner,
+                place,
+                value,
+                ..
+            } => in_expr(owner) || in_expr(place) || in_expr(value),
+            Stmt::Each { over, .. } => in_expr(over),
+            Stmt::While { test, .. } => in_expr(test),
+            Stmt::If { branches, .. } => branches.iter().any(|(test, _)| in_expr(test)),
+            Stmt::Range {
+                start, stop, step, ..
+            } => in_expr(start) || in_expr(stop) || step.as_ref().is_some_and(in_expr),
+            Stmt::Break | Stmt::Continue => false,
+        };
+        here || blocks_in(statement).into_iter().any(calls_user)
+    }
+    body.iter().any(in_stmt)
+}
+
+fn blocks_in(statement: &Stmt) -> Vec<&[Stmt]> {
+    match statement {
+        Stmt::If {
+            branches,
+            otherwise,
+        } => {
+            let mut found: Vec<&[Stmt]> =
+                branches.iter().map(|(_, body)| body.as_slice()).collect();
+            found.extend(otherwise.iter().map(Vec::as_slice));
+            found
+        }
+        Stmt::Range { body, .. } | Stmt::While { body, .. } | Stmt::Each { body, .. } => {
+            vec![body]
+        }
+        _ => Vec::new(),
     }
 }

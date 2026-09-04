@@ -21,6 +21,8 @@ pub fn aborting(count: usize) -> String {
 
 // ── 오류 경로 추적 ─────────────────────────────────────────────
 
+pub const STACK_DEEP: &str = "최대 재귀 깊이에 도달함";
+
 pub const TRACE: &str = "오류 경로 추적:";
 pub const FRAME_UNKNOWN: &str = "<알 수 없음>";
 pub const FRAME_TOP: &str = "<최상단>";
@@ -48,6 +50,7 @@ pub const NO_BLOCK: &str = "구문 블록의 들여쓰기 누락";
 pub const NOT_NEGATION: &str = "'-지'에 대응하는 '않다' 누락";
 pub const DECL_NOT_ONE: &str = "선언문에 지정된 표현식이 단일 값이 아님";
 pub const REMOVE_NEEDS_FIELD: &str = "'제거하다'의 대상이 자리나 명칭이 아님";
+pub const TABLE_ITEM: &str = "`<값>의 묶음` 형식 준수 필요";
 pub const TABLE_NO_END: &str = "묶음 항목이 '묶음'으로 끝나지 않음";
 pub const DECL_NO_COPULA: &str = "선언문에서 '이다' 누락";
 pub const HEAD_NO_QUOTATIVE: &str = "정의에서 '라는 것은' 누락";
@@ -90,12 +93,32 @@ pub fn not_a_verb(found: &str) -> String {
     format!("동사가 아님: {found}")
 }
 
+pub fn already_defined(name: &str) -> String {
+    format!("이미 정의됨: '{name}'")
+}
+
+pub const GENITIVE_PARAM: &str = "매개변수에 '~의' 사용 불가능";
+
+pub fn builtin_reserved(name: &str) -> String {
+    format!("내장 식별자를 정의할 수 없음: '{name}'")
+}
+
+pub const NAME_IS_PARTICLE: &str = "이름에 조사를 사용할 수 없습니다.";
+
+pub fn name_shadows_verb(name: &str, verb: &str) -> String {
+    format!("'{name}'이 동사 '{verb}'의 활용형과 중복됨")
+}
+
 pub fn not_a_value(found: &str) -> String {
     format!("값이 아님: {found}")
 }
 
 pub fn not_head_value(head: &str) -> String {
     format!("관형형 뒤에 `값`이 아님: '{head}'")
+}
+
+pub fn not_assigned(name: &str) -> String {
+    format!("선언되지 않은 값: '{name}'")
 }
 
 pub fn not_one(what: &str, mark: &str) -> String {
@@ -207,6 +230,12 @@ pub fn module_missing(module: &str) -> String {
 }
 
 // ── 실행 중 ─────────────────────────────────────────────────
+
+pub const MISSING_PERIOD: &str = "'.'가 없음";
+
+pub fn overflow(verb: &str) -> String {
+    format!("'{verb}'의 결과가 정수 범위를 초과함")
+}
 
 pub const DIV_ZERO: &str = "0으로 나눌 수 없음";
 

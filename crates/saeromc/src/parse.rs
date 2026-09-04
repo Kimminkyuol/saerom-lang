@@ -664,6 +664,13 @@ impl<'a> Parser<'a> {
                 self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
                 Ok(value)
             }
+            // 조사와 동음인 낱말(가·는·의·로…)은 이름이 될 수 없다. 그냥 "값이 아님"
+            // 으로 흘리면 원인을 알 수 없어 따로 짚는다.
+            Tok::Particle { .. } => Err(Diag::syntax(
+                msg::not_a_value(&describe(&token.tok)),
+                span,
+            )
+            .with_hint(msg::NAME_IS_PARTICLE)),
             other => Err(Diag::syntax(msg::not_a_value(&describe(other)), span)),
         }
     }
@@ -949,12 +956,34 @@ impl<'a> Parser<'a> {
 
     fn table_body(&mut self, span: Span) -> Result<Expr> {
         let mut entries = Vec::new();
+        let mut items: Vec<Expr> = Vec::new();
         while !self.keyword_at(0, "묶음") {
-            entries.push(self.table_entry()?);
+            // `<이름>가 <값>인` 이면 명칭, 아니면 자리값. 후자가 있어야
+            // `3인 묶음` 처럼 한 개짜리 묶음을 적을 수 있다.
+            if matches!(self.peek(), Tok::Name(_))
+                && matches!(
+                    self.ahead(1).tok,
+                    Tok::Particle {
+                        role: "subject",
+                        ..
+                    }
+                )
+            {
+                entries.push(self.table_entry()?);
+                continue;
+            }
+            match self.table_tail()? {
+                Expr::Table {
+                    items: found,
+                    entries: none,
+                    ..
+                } if none.is_empty() => items.extend(found),
+                value => items.push(value),
+            }
         }
         self.at += 1;
         Ok(Expr::Table {
-            items: Vec::new(),
+            items,
             entries,
             span,
         })
@@ -987,9 +1016,23 @@ impl<'a> Parser<'a> {
             ));
         }
         self.at += 1;
+        Ok((name, self.table_tail()?))
+    }
+
+    // `이고`/`인`, 또는 자리값이면 `의 묶음` 이 나올 때까지 값 하나를 읽는다.
+    fn table_tail(&mut self) -> Result<Expr> {
         let mut slots: Vec<Slot> = Vec::new();
         loop {
             let token = self.ahead(0);
+            if self.keyword_at(0, "묶음") {
+                let [one] = slots.as_slice() else {
+                    return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
+                };
+                if one.marker != Marker::Case("의") {
+                    return Err(Diag::syntax(msg::TABLE_ITEM, token.span));
+                }
+                return Ok(slots.pop().expect("값 하나").expr);
+            }
             if matches!(
                 token.tok,
                 Tok::Copula {
@@ -1000,7 +1043,7 @@ impl<'a> Parser<'a> {
                 if slots.len() != 1 {
                     return Err(Diag::syntax(msg::DECL_NOT_ONE, token.span));
                 }
-                return Ok((name, slots.pop().expect("값 하나").expr));
+                return Ok(slots.pop().expect("값 하나").expr);
             }
             if matches!(token.tok, Tok::Verb { .. } | Tok::Copula { .. }) {
                 let info = self.take_verb()?;

@@ -35,12 +35,9 @@ struct Frame {
 impl Frame {
     fn place(&mut self, name: &str, tables: &mut Tables, globals: &mut u32) -> Place {
         if self.inside_function {
-            if let Some(&found) = self.locals.get(name) {
-                return Place::Local(found);
-            }
-            if let Some(&slot) = tables.globals.get(name) {
-                return Place::Global(slot);
-            }
+            // 함수 안의 매김은 언제나 지역이다. 전역으로 새면 이름이 겹치는 것만으로
+            // 남의 전역(모듈 상수 포함)을 덮어쓴다.
+            let _ = tables;
             return Place::Local(self.bind_local(name));
         }
         Place::Global(global_slot(name, tables, globals))
@@ -318,6 +315,20 @@ impl<'a> Resolver<'a> {
                 ASt::Define {
                     name, params, span, ..
                 } => {
+                    if crate::sig::Signatures::reserved(name) {
+                        self.note(unit, Diag::name(msg::builtin_reserved(name), *span));
+                        continue;
+                    }
+                    // `철수의 스물을 알린다`는 파서가 `철수의 스물`을 필드로 먼저
+                    // 먹어 호출이 성립하지 않는다. 인자가 리터럴일 때만 우연히
+                    // 되던 자리라 아예 막는다.
+                    if params.iter().any(|(marker, _)| *marker == Marker::Case("의")) {
+                        self.note(
+                            unit,
+                            Diag::syntax(msg::GENITIVE_PARAM.to_string(), *span)
+                        );
+                        continue;
+                    }
                     let func = self.functions.len() as FuncId;
                     self.functions.push(Function {
                         name: Rc::from(name.as_str()),
@@ -330,13 +341,26 @@ impl<'a> Resolver<'a> {
                     });
                     self.bodies.push(statement);
                     self.owners.push(unit);
+                    let params: Vec<Marker> = params.iter().map(|(marker, _)| *marker).collect();
+                    // 같은 이름·같은 조사면 호출 때 나중 것이 조용히 이긴다.
+                    if self.tables[unit]
+                        .verbs
+                        .iter()
+                        .any(|found| found.name == *name && same_slots(&found.params, &params))
+                    {
+                        self.note(unit, Diag::name(msg::already_defined(name), *span));
+                    }
                     self.tables[unit].verbs.push(Verb {
                         name: name.clone(),
-                        params: params.iter().map(|(marker, _)| *marker).collect(),
+                        params,
                         func,
                     });
                 }
                 ASt::Noun { name, span, .. } => {
+                    if crate::words::FIELDS.contains(&name.as_str()) {
+                        self.note(unit, Diag::name(msg::builtin_reserved(name), *span));
+                        continue;
+                    }
                     let func = self.functions.len() as FuncId;
                     self.functions.push(Function {
                         name: Rc::from(name.as_str()),
@@ -349,6 +373,9 @@ impl<'a> Resolver<'a> {
                     });
                     self.bodies.push(statement);
                     self.owners.push(unit);
+                    if self.tables[unit].nouns.contains_key(name) {
+                        self.note(unit, Diag::name(msg::already_defined(name), *span));
+                    }
                     self.tables[unit].nouns.insert(name.clone(), func);
                 }
                 _ => continue,
@@ -474,6 +501,15 @@ impl<'a> Resolver<'a> {
             bind_names(body, &mut bound);
             for name in bound {
                 frame.place(&name, &mut self.tables[unit], &mut self.globals);
+            }
+            let taken: std::collections::HashSet<String> = frame.locals.keys().cloned().collect();
+            let given: std::collections::HashSet<String> = match statement {
+                ASt::Define { params, .. } => params.iter().map(|(_, name)| name.clone()).collect(),
+                ASt::Noun { owner, .. } => std::iter::once(owner.clone()).collect(),
+                _ => Default::default(),
+            };
+            for error in crate::assign::check(body, &taken, &given) {
+                self.note(unit, error);
             }
             let lowered = self.lower_block(&mut frame, body);
             self.functions[index].params = params;
@@ -966,12 +1002,13 @@ impl<'a> Resolver<'a> {
         call: &ast::CallExpr,
     ) -> Expr {
         let used: Vec<Marker> = args.iter().map(|(marker, _)| *marker).collect();
-        let spare = format!("{verb}·나머지");
-        let verb = if call.tail.as_deref() == Some("나머지") {
-            spare.as_str()
-        } else {
-            verb
-        };
+        // `나눈 나머지`·`나눈 몫`처럼 꼬리 명사가 갈래를 가른다.
+        let spare = call
+            .tail
+            .as_deref()
+            .filter(|tail| *tail != "값")
+            .map(|tail| format!("{verb}·{tail}"));
+        let verb = spare.as_deref().unwrap_or(verb);
         let found = self.tables[home]
             .verbs
             .iter()

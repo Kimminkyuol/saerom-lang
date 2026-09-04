@@ -1,6 +1,7 @@
-use crate::diag::Result;
+use crate::diag::{Diag, Result};
 use crate::hangul::{is_syllable, Ending};
 use crate::lex::{tokenize, Tok, Token, Vocabulary};
+use crate::msg;
 use crate::sig::{ordered, Marker, Signatures};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -162,6 +163,7 @@ fn gather(
         }
     }
     if root {
+        shadowed(&vocab, &tokens)?;
         into.vocab = vocab;
     }
 
@@ -185,6 +187,19 @@ fn gather(
         chain.remove(&path);
         if import.names.is_none() {
             into.modules.insert(import.module);
+        }
+    }
+    Ok(())
+}
+
+fn shadowed(vocab: &Vocabulary, tokens: &[Token]) -> Result<()> {
+    for token in tokens {
+        let Tok::Name(name) = &token.tok else { continue };
+        if let Some(verb) = vocab.verb_named(name) {
+            return Err(Diag::name(
+                msg::name_shadows_verb(name, verb),
+                token.span,
+            ));
         }
     }
     Ok(())
