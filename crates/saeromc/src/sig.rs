@@ -1,3 +1,4 @@
+use crate::msg;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -5,7 +6,6 @@ pub enum Marker {
     Case(&'static str),
     Bare,
     Module,
-    Step,
 }
 
 impl Marker {
@@ -13,7 +13,7 @@ impl Marker {
         match self {
             Marker::Case(particle) => !crate::words::STRUCTURAL.contains(&particle),
             Marker::Bare => true,
-            Marker::Module | Marker::Step => false,
+            Marker::Module => false,
         }
     }
 
@@ -22,7 +22,6 @@ impl Marker {
             Marker::Case(particle) => particle,
             Marker::Bare => "없음",
             Marker::Module => "모듈",
-            Marker::Step => "간격",
         }
     }
 }
@@ -128,3 +127,27 @@ const BUILTIN: &[(&str, &[Marker])] = &[
     ("아니다", &[Marker::Case("가"), Marker::Bare]),
     ("아니다", &[Marker::Case("가")]),
 ];
+
+pub fn shown(markers: &[Marker]) -> String {
+    let used: Vec<&str> = markers
+        .iter()
+        .filter(|m| **m != Marker::Bare)
+        .map(|m| m.label())
+        .collect();
+    if used.is_empty() {
+        msg::NO_PARTICLE.to_string()
+    } else {
+        used.join(", ")
+    }
+}
+
+pub fn describe(verb: &str, params: &[Marker]) -> String {
+    let mut out = String::new();
+    for marker in params {
+        if *marker != Marker::Bare {
+            out.push_str(&format!("~{} ", marker.label()));
+        }
+    }
+    out.push_str(verb);
+    out
+}

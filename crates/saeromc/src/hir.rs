@@ -56,7 +56,7 @@ pub enum Expr {
     Or(Box<Expr>, Box<Expr>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Place {
     Local(LocalId),
     Global(GlobalId),
@@ -134,6 +134,7 @@ pub struct Function {
 }
 
 pub struct Module {
+    pub unit: usize,
     pub name: Rc<str>,
     pub path: Rc<str>,
     pub source: Rc<str>,

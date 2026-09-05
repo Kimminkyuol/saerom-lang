@@ -5,7 +5,7 @@ use crate::hir::*;
 use crate::intern::Interner;
 use crate::load::{Loaded, UnitId};
 use crate::msg;
-use crate::sig::Marker;
+use crate::sig::{describe, shown, Marker};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -30,6 +30,14 @@ struct Frame {
     locals: HashMap<String, LocalId>,
     count: u32,
     inside_function: bool,
+    // 동사 자리 매개변수 -> 실제로 넘어온 동사 이름
+    verbs: HashMap<String, String>,
+}
+
+// 동사를 매개변수로 받는 정의. 호출 자리마다 복제해서 푼다.
+struct Generic {
+    params: Vec<(Marker, String)>,
+    verbs: Vec<String>,
 }
 
 impl Frame {
@@ -74,7 +82,12 @@ pub struct Resolver<'a> {
     globals: u32,
     module_of: Vec<ModuleId>,
     errors: Vec<Diag>,
+    generics: HashMap<FuncId, Generic>,
+    special: HashMap<(FuncId, Vec<String>), FuncId>,
+    bindings: Vec<HashMap<String, String>>,
 }
+
+const MAX_SPECIAL: usize = 256;
 
 pub fn resolve(loaded: &Loaded) -> Result<Program, Vec<Diag>> {
     let mut resolver = Resolver {
@@ -87,6 +100,9 @@ pub fn resolve(loaded: &Loaded) -> Result<Program, Vec<Diag>> {
         globals: 0,
         module_of: Vec::new(),
         errors: Vec::new(),
+        generics: HashMap::new(),
+        special: HashMap::new(),
+        bindings: Vec::new(),
     };
     let order = order_of(loaded);
     let mut module_of = vec![0 as ModuleId; loaded.units.len()];
@@ -97,6 +113,7 @@ pub fn resolve(loaded: &Loaded) -> Result<Program, Vec<Diag>> {
     for &unit in &order {
         resolver.declare(unit);
     }
+    resolver.spread_verb_slots();
     let modules = order
         .iter()
         .map(|&unit| resolver.lower_module(unit))
@@ -160,29 +177,6 @@ fn order_args(mut args: Vec<(Marker, Expr)>, params: &[Marker]) -> Vec<Expr> {
     out
 }
 
-fn shown(markers: &[Marker]) -> String {
-    let used: Vec<&str> = markers
-        .iter()
-        .filter(|m| **m != Marker::Bare)
-        .map(|m| m.label())
-        .collect();
-    if used.is_empty() {
-        msg::NO_PARTICLE.to_string()
-    } else {
-        used.join(", ")
-    }
-}
-
-fn describe(verb: &str, params: &[Marker]) -> String {
-    let mut out = String::new();
-    for marker in params {
-        if *marker != Marker::Bare {
-            out.push_str(&format!("~{} ", marker.label()));
-        }
-    }
-    out.push_str(verb);
-    out
-}
 
 impl<'a> Resolver<'a> {
     fn note(&mut self, unit: UnitId, mut error: Diag) {
@@ -313,7 +307,10 @@ impl<'a> Resolver<'a> {
         for statement in statements {
             match statement {
                 ASt::Define {
-                    name, params, span, ..
+                    name,
+                    params,
+                    body,
+                    span,
                 } => {
                     if crate::sig::Signatures::reserved(name) {
                         self.note(unit, Diag::name(msg::builtin_reserved(name), *span));
@@ -341,6 +338,17 @@ impl<'a> Resolver<'a> {
                     });
                     self.bodies.push(statement);
                     self.owners.push(unit);
+                    self.bindings.push(HashMap::new());
+                    let taken = verb_slots(params, body);
+                    if !taken.is_empty() {
+                        self.generics.insert(
+                            func,
+                            Generic {
+                                params: params.clone(),
+                                verbs: taken,
+                            },
+                        );
+                    }
                     let params: Vec<Marker> = params.iter().map(|(marker, _)| *marker).collect();
                     // 같은 이름·같은 조사면 호출 때 나중 것이 조용히 이긴다.
                     if self.tables[unit]
@@ -373,6 +381,7 @@ impl<'a> Resolver<'a> {
                     });
                     self.bodies.push(statement);
                     self.owners.push(unit);
+                    self.bindings.push(HashMap::new());
                     if self.tables[unit].nouns.contains_key(name) {
                         self.note(unit, Diag::name(msg::already_defined(name), *span));
                     }
@@ -386,6 +395,108 @@ impl<'a> Resolver<'a> {
                 self.declare_functions(unit, block);
             }
         }
+    }
+}
+
+// 매개변수 이름을 몸통에서 동사로 부르면 그 자리는 동사 자리다.
+fn verb_slots(params: &[(Marker, String)], body: &[ASt]) -> Vec<String> {
+    let mut called = Vec::new();
+    calls_in_block(body, &mut called);
+    params
+        .iter()
+        .filter(|(_, name)| called.iter().any(|call| call.verb == *name))
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+fn calls_in_block<'b>(body: &'b [ASt], into: &mut Vec<&'b ast::CallExpr>) {
+    for statement in body {
+        match statement {
+            ASt::Declare { assigns, .. } => {
+                for (_, value) in assigns {
+                    calls_in_expr(value, into);
+                }
+            }
+            ASt::Exec { calls, .. } => {
+                for call in calls {
+                    into.push(call);
+                    for slot in &call.slots {
+                        calls_in_expr(&slot.expr, into);
+                    }
+                }
+            }
+            ASt::Value { expr, .. } | ASt::Return { value: expr, .. } => {
+                calls_in_expr(expr, into)
+            }
+            ASt::If { branches, .. } => {
+                for (test, _) in branches {
+                    calls_in_expr(test, into);
+                }
+            }
+            ASt::Loop { kind, .. } => match kind {
+                LoopKind::Range {
+                    start, stop, step, ..
+                } => {
+                    calls_in_expr(start, into);
+                    calls_in_expr(stop, into);
+                    if let Some(step) = step {
+                        calls_in_expr(step, into);
+                    }
+                }
+                LoopKind::While { test } => calls_in_expr(test, into),
+                LoopKind::Each { over, .. } => calls_in_expr(over, into),
+            },
+            _ => {}
+        }
+        for block in blocks_of(statement) {
+            calls_in_block(block, into);
+        }
+    }
+}
+
+fn calls_in_expr<'b>(expr: &'b ast::Expr, into: &mut Vec<&'b ast::CallExpr>) {
+    match expr {
+        ast::Expr::Call(call) => {
+            into.push(call);
+            for slot in &call.slots {
+                calls_in_expr(&slot.expr, into);
+            }
+        }
+        ast::Expr::Passive(passive) => {
+            calls_in_expr(&passive.head, into);
+            for slot in &passive.slots {
+                calls_in_expr(&slot.expr, into);
+            }
+        }
+        ast::Expr::Table { items, entries, .. } => {
+            for item in items {
+                calls_in_expr(item, into);
+            }
+            for (_, value) in entries {
+                calls_in_expr(value, into);
+            }
+        }
+        ast::Expr::Template { parts, .. } => {
+            for part in parts {
+                if let ast::TemplatePart::Expr(inner) = part {
+                    calls_in_expr(inner, into);
+                }
+            }
+        }
+        ast::Expr::Field { owner, .. } => calls_in_expr(owner, into),
+        ast::Expr::Pick { owner, key, .. } => {
+            calls_in_expr(owner, into);
+            calls_in_expr(key, into);
+        }
+        ast::Expr::Spot { owner, place, .. } => {
+            calls_in_expr(owner, into);
+            calls_in_expr(place, into);
+        }
+        ast::Expr::And { left, right, .. } | ast::Expr::Or { left, right, .. } => {
+            calls_in_expr(left, into);
+            calls_in_expr(right, into);
+        }
+        _ => {}
     }
 }
 
@@ -443,6 +554,7 @@ impl<'a> Resolver<'a> {
             locals: HashMap::new(),
             count: 0,
             inside_function: false,
+            verbs: HashMap::new(),
         };
         let mut init = Vec::new();
         for name in TYPE_VALUES {
@@ -468,6 +580,7 @@ impl<'a> Resolver<'a> {
             .as_deref()
             .map_or_else(|| found.name.clone(), |path| path.display().to_string());
         Module {
+            unit,
             name: Rc::from(found.name.as_str()),
             path: Rc::from(path.as_str()),
             source: Rc::from(found.source.as_str()),
@@ -476,8 +589,70 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    // 매개변수를 부르지 않고 다른 동사 자리로 넘기기만 해도 동사 자리다.
+    // 넘겨받는 쪽이 나중에 정해질 수 있으므로 고정점까지 돈다.
+    fn spread_verb_slots(&mut self) {
+        loop {
+            let mut moved = false;
+            for index in 0..self.bodies.len() {
+                let ASt::Define { params, body, .. } = self.bodies[index] else {
+                    continue;
+                };
+                let unit = self.owners[index];
+                let mut calls = Vec::new();
+                calls_in_block(body, &mut calls);
+                for call in calls {
+                    let used: Vec<Marker> =
+                        call.slots.iter().map(|slot| slot.marker).collect();
+                    let Some(target) = self.tables[unit]
+                        .verbs
+                        .iter()
+                        .rev()
+                        .find(|found| found.name == call.verb && same_slots(&found.params, &used))
+                        .map(|found| found.func)
+                    else {
+                        continue;
+                    };
+                    let Some(generic) = self.generics.get(&target) else {
+                        continue;
+                    };
+                    let wanted: Vec<Marker> = generic
+                        .params
+                        .iter()
+                        .filter(|(_, name)| generic.verbs.contains(name))
+                        .map(|(marker, _)| *marker)
+                        .collect();
+                    for marker in wanted {
+                        let Some(slot) = call.slots.iter().find(|slot| slot.marker == marker)
+                        else {
+                            continue;
+                        };
+                        let Some(given) = slot.expr.as_name() else { continue };
+                        if !params.iter().any(|(_, name)| name == given) {
+                            continue;
+                        }
+                        let here = index as FuncId;
+                        let found = self.generics.entry(here).or_insert_with(|| Generic {
+                            params: params.clone(),
+                            verbs: Vec::new(),
+                        });
+                        if !found.verbs.iter().any(|name| name == given) {
+                            found.verbs.push(given.to_string());
+                            moved = true;
+                        }
+                    }
+                }
+            }
+            if !moved {
+                return;
+            }
+        }
+    }
+
     fn lower_functions(&mut self) -> Vec<Function> {
-        for index in 0..self.bodies.len() {
+        let mut index = 0;
+        // 특수화가 뒤에 붙으므로 길이를 매번 다시 본다.
+        while index < self.bodies.len() {
             let statement = self.bodies[index];
             let unit = self.owners[index];
             let mut frame = Frame {
@@ -485,12 +660,23 @@ impl<'a> Resolver<'a> {
                 locals: HashMap::new(),
                 count: 0,
                 inside_function: true,
+                verbs: self.bindings[index].clone(),
             };
+            // 동사 자리가 채워지지 않은 틀은 부를 수 없다. 특수화한 것만 낮춘다.
+            if self.generics.contains_key(&(index as FuncId)) && frame.verbs.is_empty() {
+                index += 1;
+                continue;
+            }
             let (params, body) = match statement {
                 ASt::Define { params, body, .. } => {
-                    let slots = params
+                    let wanted: Vec<&String> = params
                         .iter()
-                        .map(|(_, name)| self.local(&mut frame, name))
+                        .map(|(_, name)| name)
+                        .filter(|name| !frame.verbs.contains_key(*name))
+                        .collect();
+                    let slots = wanted
+                        .into_iter()
+                        .map(|name| self.local(&mut frame, name))
                         .collect();
                     (slots, body)
                 }
@@ -504,7 +690,11 @@ impl<'a> Resolver<'a> {
             }
             let taken: std::collections::HashSet<String> = frame.locals.keys().cloned().collect();
             let given: std::collections::HashSet<String> = match statement {
-                ASt::Define { params, .. } => params.iter().map(|(_, name)| name.clone()).collect(),
+                ASt::Define { params, .. } => params
+                    .iter()
+                    .map(|(_, name)| name.clone())
+                    .filter(|name| !frame.verbs.contains_key(name))
+                    .collect(),
                 ASt::Noun { owner, .. } => std::iter::once(owner.clone()).collect(),
                 _ => Default::default(),
             };
@@ -515,6 +705,7 @@ impl<'a> Resolver<'a> {
             self.functions[index].params = params;
             self.functions[index].locals = frame.count;
             self.functions[index].body = lowered;
+            index += 1;
         }
         std::mem::take(&mut self.functions)
     }
@@ -884,12 +1075,20 @@ impl<'a> Resolver<'a> {
                 return found;
             }
         }
+        // 동사 자리에 온 이름은 값이 아니다. 인자를 낮추기 전에 걷어낸다.
+        let bound = match self.verb_bindings(frame, &call.verb, &slots, home, call.span) {
+            Ok(found) => found,
+            Err(()) => return Expr::Nothing,
+        };
         let mut args = Vec::with_capacity(slots.len());
         for slot in &slots {
+            if bound.iter().any(|(marker, _, _)| *marker == slot.marker) {
+                continue;
+            }
             let value = self.lower_expr(frame, &slot.expr);
             args.push((slot.marker, value));
         }
-        self.finish_call(frame, &call.verb, args, home, namespaced, call)
+        self.finish_call(frame, &call.verb, args, home, namespaced, call, &bound)
     }
 
     fn lower_remove(
@@ -992,6 +1191,106 @@ impl<'a> Resolver<'a> {
         None
     }
 
+    // 이 호출이 동사 매개변수를 받는 정의를 가리키면, 그 자리와 넘어온 동사 이름을 낸다.
+    fn verb_bindings(
+        &mut self,
+        frame: &Frame,
+        verb: &str,
+        slots: &[&'a ast::Slot],
+        home: UnitId,
+        span: Span,
+    ) -> std::result::Result<Vec<(Marker, String, String)>, ()> {
+        let used: Vec<Marker> = slots.iter().map(|slot| slot.marker).collect();
+        let Some(func) = self.tables[home]
+            .verbs
+            .iter()
+            .rev()
+            .find(|found| found.name == verb && same_slots(&found.params, &used))
+            .map(|found| found.func)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(generic) = self.generics.get(&func) else {
+            return Ok(Vec::new());
+        };
+        let wanted: Vec<(Marker, String)> = generic
+            .params
+            .iter()
+            .filter(|(_, name)| generic.verbs.contains(name))
+            .cloned()
+            .collect();
+        let mut found = Vec::new();
+        for (marker, name) in wanted {
+            let Some(slot) = slots.iter().find(|slot| slot.marker == marker) else {
+                continue;
+            };
+            let Some(given) = slot.expr.as_name() else {
+                self.note(
+                    home,
+                    Diag::syntax(msg::want_verb_name(&name), slot.expr.span()),
+                );
+                return Err(());
+            };
+            // 동사 자리를 다시 넘기는 꼴이면 이미 묶인 이름으로 바꾼다.
+            let given: &str = frame.verbs.get(given).map_or(given, String::as_str);
+            if !self.tables[home]
+                .verbs
+                .iter()
+                .any(|kept| kept.name == given)
+            {
+                let close = suggest(
+                    given,
+                    self.tables[home]
+                        .verbs
+                        .iter()
+                        .map(|kept| kept.name.as_str())
+                        .collect::<Vec<_>>(),
+                )
+                .map(str::to_string);
+                let mut error = Diag::name(msg::verb_undefined(given), slot.expr.span());
+                if let Some(close) = close {
+                    error = error.with_hint(msg::similar(&close));
+                }
+                self.note(home, error);
+                return Err(());
+            }
+            found.push((marker, name, given.to_string()));
+        }
+        let _ = span;
+        Ok(found)
+    }
+
+    // 넘어온 동사 이름마다 몸통을 한 벌씩 만든다.
+    fn specialize(&mut self, func: FuncId, given: &[(String, String)]) -> Option<FuncId> {
+        let key: Vec<String> = given.iter().map(|(_, verb)| verb.clone()).collect();
+        if let Some(&found) = self.special.get(&(func, key.clone())) {
+            return Some(found);
+        }
+        if self.special.len() >= MAX_SPECIAL {
+            let span = self.functions[func as usize].span;
+            self.note(self.owners[func as usize], Diag::syntax(msg::TOO_MANY_SPECIAL, span));
+            return None;
+        }
+        let made = self.functions.len() as FuncId;
+        let source = &self.functions[func as usize];
+        self.functions.push(Function {
+            name: source.name.clone(),
+            kind: source.kind,
+            module: source.module,
+            params: Vec::new(),
+            locals: 0,
+            body: Vec::new(),
+            span: source.span,
+        });
+        self.bodies.push(self.bodies[func as usize]);
+        self.owners.push(self.owners[func as usize]);
+        self.bindings
+            .push(given.iter().cloned().collect::<HashMap<_, _>>());
+        self.special.insert((func, key), made);
+        Some(made)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn finish_call(
         &mut self,
         frame: &mut Frame,
@@ -1000,8 +1299,11 @@ impl<'a> Resolver<'a> {
         home: UnitId,
         namespaced: bool,
         call: &ast::CallExpr,
+        given: &[(Marker, String, String)],
     ) -> Expr {
-        let used: Vec<Marker> = args.iter().map(|(marker, _)| *marker).collect();
+        // 동사 자리는 인자에서 빠졌으니 찾을 때만 도로 넣는다.
+        let mut used: Vec<Marker> = args.iter().map(|(marker, _)| *marker).collect();
+        used.extend(given.iter().map(|(marker, _, _)| *marker));
         // `나눈 나머지`·`나눈 몫`처럼 꼬리 명사가 갈래를 가른다.
         let spare = call
             .tail
@@ -1009,6 +1311,9 @@ impl<'a> Resolver<'a> {
             .filter(|tail| *tail != "값")
             .map(|tail| format!("{verb}·{tail}"));
         let verb = spare.as_deref().unwrap_or(verb);
+        // 동사 자리 매개변수면 넘어온 이름으로 바꿔 부른다.
+        let swapped = frame.verbs.get(verb).cloned();
+        let verb = swapped.as_deref().unwrap_or(verb);
         let found = self.tables[home]
             .verbs
             .iter()
@@ -1016,6 +1321,22 @@ impl<'a> Resolver<'a> {
             .find(|found| found.name == verb && same_slots(&found.params, &used))
             .map(|found| (found.func, found.params.clone()));
         if let Some((func, params)) = found {
+            let (func, params) = if given.is_empty() {
+                (func, params)
+            } else {
+                let bind: Vec<(String, String)> = given
+                    .iter()
+                    .map(|(_, name, verb)| (name.clone(), verb.clone()))
+                    .collect();
+                let Some(made) = self.specialize(func, &bind) else {
+                    return Expr::Nothing;
+                };
+                let left: Vec<Marker> = params
+                    .into_iter()
+                    .filter(|marker| !given.iter().any(|(kept, _, _)| kept == marker))
+                    .collect();
+                (made, left)
+            };
             let made = Expr::Call {
                 callee: Callee::User(func),
                 args: order_args(args, &params),

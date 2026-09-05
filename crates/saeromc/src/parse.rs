@@ -4,7 +4,7 @@ use crate::hangul::{Ending, Pos};
 use crate::lex::{tokenize, Num, Part, Tok, Token};
 use crate::msg;
 use crate::prescan::{resolve_module, Program};
-use crate::sig::{fits, Marker};
+use crate::sig::Marker;
 use crate::words;
 use std::path::Path;
 
@@ -27,6 +27,9 @@ pub fn parse<'a>(
         base_dir,
         errors: Vec::new(),
         inside: false,
+        plan: Vec::new(),
+        picks: Vec::new(),
+        stuck: false,
     };
     let statements = parser.program();
     Parsed {
@@ -42,6 +45,10 @@ struct Parser<'a> {
     base_dir: Option<&'a Path>,
     errors: Vec<Diag>,
     inside: bool,
+    // 용언마다 "몇 번째로 긴 묶기를 고를지". 되짚기가 이 벡터를 돌린다.
+    plan: Vec<usize>,
+    picks: Vec<usize>,
+    stuck: bool,
 }
 
 #[derive(Clone)]
@@ -132,7 +139,8 @@ impl<'a> Parser<'a> {
     }
 
     fn resync(&mut self) {
-        while !matches!(self.peek(), Tok::Eof) {
+        // 들여쓰기 경계는 넘지 않는다. 넘으면 다음 줄까지 통째로 먹는다.
+        while !matches!(self.peek(), Tok::Eof | Tok::Indent(_) | Tok::Dedent(_)) {
             let done = matches!(self.peek(), Tok::Newline);
             self.at += 1;
             if done {
@@ -164,7 +172,7 @@ impl<'a> Parser<'a> {
             if self.accept(&Tok::Newline) {
                 continue;
             }
-            match self.statement() {
+            match self.replanned(Self::statement) {
                 Ok(statement) => statements.push(statement),
                 Err(error) => {
                     self.note(error);
@@ -174,6 +182,54 @@ impl<'a> Parser<'a> {
         }
         statements
     }
+
+    // 묶기를 잘못 고르면 뒤에서야 드러난다. 걸리면 다른 묶기로 다시 읽는다.
+    fn replanned<T>(&mut self, run: fn(&mut Self) -> Result<T>) -> Result<T> {
+        let (start, errors, inside) = (self.at, self.errors.len(), self.inside);
+        // 안쪽 되짚기가 바깥 것의 상태를 건드리지 않게 따로 둔다.
+        let held = (
+            std::mem::take(&mut self.plan),
+            std::mem::take(&mut self.picks),
+            self.stuck,
+        );
+        let made = self.replan_pass(run, start, errors, inside);
+        (self.plan, self.picks, self.stuck) = held;
+        made
+    }
+
+    fn replan_pass<T>(
+        &mut self,
+        run: fn(&mut Self) -> Result<T>,
+        start: usize,
+        errors: usize,
+        inside: bool,
+    ) -> Result<T> {
+        let mut plan: Vec<usize> = Vec::new();
+        for _ in 0..32 {
+            self.at = start;
+            self.errors.truncate(errors);
+            self.inside = inside;
+            self.plan.clone_from(&plan);
+            self.picks.clear();
+            self.stuck = false;
+            let made = run(self);
+            if made.is_ok() && !self.stuck {
+                return made;
+            }
+            let counts = std::mem::take(&mut self.picks);
+            if !bump(&mut plan, &counts) {
+                break;
+            }
+        }
+        self.at = start;
+        self.errors.truncate(errors);
+        self.inside = inside;
+        self.plan.clear();
+        self.picks.clear();
+        self.stuck = false;
+        run(self)
+    }
+
 
     fn block(&mut self) -> Result<Block> {
         self.expect(&Tok::Symbol(':'), msg::WANT_COLON)?;
@@ -189,7 +245,7 @@ impl<'a> Parser<'a> {
                 Tok::Newline => {
                     self.at += 1;
                 }
-                _ => match self.statement() {
+                _ => match self.replanned(Self::statement) {
                     Ok(statement) => statements.push(statement),
                     Err(error) => {
                         self.note(error);
@@ -203,6 +259,29 @@ impl<'a> Parser<'a> {
         }
         Ok(statements)
     }
+}
+
+fn exact(used: &[Marker], way: &[Marker]) -> bool {
+    if used.len() != way.len() {
+        return false;
+    }
+    let (mut a, mut b) = (used.to_vec(), way.to_vec());
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
+}
+
+// 계수기처럼 한 칸 올린다. 더 돌릴 데가 없으면 거짓.
+fn bump(plan: &mut Vec<usize>, counts: &[usize]) -> bool {
+    plan.resize(counts.len(), 0);
+    for at in (0..counts.len()).rev() {
+        if plan[at] + 1 < counts[at] {
+            plan[at] += 1;
+            plan[at + 1..].fill(0);
+            return true;
+        }
+    }
+    false
 }
 
 fn describe(tok: &Tok) -> String {
@@ -505,25 +584,59 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn split_slots(&self, verb: &str, slots: Vec<Slot>) -> (Vec<Slot>, Vec<Slot>) {
+    // 문장 끝 용언은 남은 자리를 다 가져간다. 조사가 안 맞으면 앞에서 잘못
+    // 묶은 것이므로 되짚기에게 알린다.
+    fn verify(&mut self, verb: &str, slots: &[Slot]) {
         let ways = self.program.signatures.ways(verb);
-        if ways.is_empty() {
-            return (Vec::new(), slots);
+        if ways.is_empty() || verb == "이다" {
+            return;
         }
+        let used: Vec<Marker> = slots
+            .iter()
+            .map(|slot| slot.marker)
+            .filter(|marker| *marker != Marker::Module)
+            .collect();
+        if !ways.iter().any(|way| exact(&used, way)) {
+            self.stuck = true;
+        }
+    }
+
+    fn split_slots(&mut self, verb: &str, slots: Vec<Slot>) -> (Vec<Slot>, Vec<Slot>) {
+        let ways = self.program.signatures.ways(verb);
         let (structural, arguments): (Vec<Slot>, Vec<Slot>) = slots
             .into_iter()
             .partition(|slot| !slot.marker.is_argument());
+        let fixed: Vec<Marker> = structural
+            .iter()
+            .map(|slot| slot.marker)
+            .filter(|marker| *marker != Marker::Module)
+            .collect();
         let total = arguments.len();
+        // 조사가 딱 맞는 꼬리만 후보다. 긴 것부터 담는다.
+        // 시그니처를 모르는 용언(동사 자리 매개변수 등)은 모든 길이가 후보다.
+        let blind = ways.is_empty();
+        let mut candidates: Vec<usize> = Vec::new();
         for count in (0..=total).rev() {
-            let tail = &arguments[total - count..];
-            let used: Vec<Marker> = tail.iter().map(|slot| slot.marker).collect();
-            if ways.iter().any(|way| fits(&used, way)) {
-                let mut taken = structural;
-                taken.extend_from_slice(tail);
-                return (arguments[..total - count].to_vec(), taken);
+            let mut used = fixed.clone();
+            used.extend(arguments[total - count..].iter().map(|slot| slot.marker));
+            if blind || ways.iter().any(|way| exact(&used, way)) {
+                candidates.push(count);
             }
         }
-        (arguments, structural)
+        let index = self.picks.len();
+        self.picks.push(candidates.len().max(1));
+        let pick = self.plan.get(index).copied().unwrap_or(0);
+        let Some(&count) = candidates.get(pick).or_else(|| candidates.first()) else {
+            // 딱 맞는 게 없다. 남은 인자를 다 준다 — 그래야 resolve 가 이 용언을
+            // 짚어 조사 오류를 낸다. 자리를 남기면 엉뚱한 데서 터진다.
+            self.stuck = true;
+            let mut taken = structural;
+            taken.extend(arguments);
+            return (Vec::new(), taken);
+        };
+        let mut taken = structural;
+        taken.extend_from_slice(&arguments[total - count..]);
+        (arguments[..total - count].to_vec(), taken)
     }
 
     fn reduce(&mut self, slots: Vec<Slot>, info: VerbInfo) -> Result<(Expr, Vec<Slot>)> {
@@ -715,11 +828,16 @@ impl<'a> Parser<'a> {
             base_dir: self.base_dir,
             errors: Vec::new(),
             inside: false,
+            plan: Vec::new(),
+            picks: Vec::new(),
+            stuck: false,
         };
-        inner.reduce_until(
-            |tok| matches!(tok, Tok::Newline | Tok::Eof),
-            msg::WANT_EMBEDDED,
-        )
+        inner.replanned(|found| {
+            found.reduce_until(
+                |tok| matches!(tok, Tok::Newline | Tok::Eof),
+                msg::WANT_EMBEDDED,
+            )
+        })
     }
 }
 
@@ -1471,17 +1589,6 @@ impl<'a> Parser<'a> {
         let mut calls: Vec<CallExpr> = Vec::new();
         loop {
             let token = self.ahead(0);
-            if self.keyword_at(0, "간격") {
-                self.at += 1;
-                if matches!(self.peek(), Tok::Particle { canon: "의", .. }) {
-                    self.at += 1;
-                }
-                let Some(last) = slots.last_mut() else {
-                    return Err(Diag::syntax(msg::NO_STEP_NUMBER, token.span));
-                };
-                last.marker = Marker::Step;
-                continue;
-            }
             if self.keyword_at(0, "동안") {
                 self.at += 1;
                 self.expect_verb_named("반복하다")?;
@@ -1536,6 +1643,7 @@ impl<'a> Parser<'a> {
                 }
                 Ending::Final | Ending::Conjunctive => {
                     let closing = info.ending == Ending::Final;
+                    self.verify(&info.name, &slots);
                     calls.push(CallExpr {
                         verb: info.name,
                         slots: std::mem::take(&mut slots),
@@ -1572,7 +1680,7 @@ impl<'a> Parser<'a> {
                 Marker::Case("부터") => start = Some(slot.expr),
                 Marker::Case("까지") => stop = Some(slot.expr),
                 Marker::Case("에서") => over = Some(slot.expr),
-                Marker::Step => step = Some(slot.expr),
+                Marker::Case("씩") => step = Some(slot.expr),
                 Marker::Case("마다") => {
                     let Some(name) = slot.expr.as_name() else {
                         return Err(Diag::syntax(msg::EACH_NOT_NAME, slot.expr.span()));

@@ -46,26 +46,21 @@ fn opens_entry(tokens: &[Token], index: usize) -> bool {
 
 fn declared_stems(tokens: &[Token]) -> HashSet<String> {
     let mut stems = HashSet::new();
-    for window in tokens.windows(5) {
-        let [head, quotative, thing, topic, colon] = window else {
-            continue;
-        };
-        let Tok::Name(name) = &head.tok else { continue };
-        if !dictionary_form(name) {
-            continue;
-        }
-        let quoted = matches!(
-            quotative.tok,
-            Tok::Copula {
-                ending: Ending::Quotative
-            }
-        );
-        let is_thing = matches!(&thing.tok, Tok::Name(word) if word == "것");
-        let is_topic = matches!(topic.tok, Tok::Particle { role: "topic", .. });
-        if quoted && is_thing && is_topic && colon.tok == Tok::Symbol(':') {
-            let mut stem = name.clone();
+    let mut keep = |name: &str| {
+        if dictionary_form(name) {
+            let mut stem = name.to_string();
             stem.pop();
             stems.insert(stem);
+        }
+    };
+    for line in lines(tokens) {
+        let Some((head, params)) = definition_head(&line) else {
+            continue;
+        };
+        keep(&head);
+        // 동사 자리 매개변수도 사전형이다. 몸통에서 활용해 부르므로 어간이 필요하다.
+        for (_, name) in &params {
+            keep(name);
         }
     }
     stems

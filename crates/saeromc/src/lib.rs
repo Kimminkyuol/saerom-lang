@@ -1,4 +1,5 @@
 mod assign;
+mod nothing;
 mod ast;
 pub mod builtins;
 pub mod diag;
@@ -80,12 +81,30 @@ pub fn analyze(
             errors,
         });
     }
-    match resolve::resolve(&loaded) {
-        Ok(program) => Ok((loaded, program)),
-        Err(errors) => Err(Failure {
+    let program = match resolve::resolve(&loaded) {
+        Ok(program) => program,
+        Err(errors) => {
+            return Err(Failure {
+                loaded: Some(loaded),
+                errors,
+            })
+        }
+    };
+    let found = types::infer(&program);
+    let errors: Vec<Diag> = nothing::check(&program, &found)
+        .into_iter()
+        .map(|(module, mut error)| {
+            error.unit = Some(program.modules[module as usize].unit);
+            error
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok((loaded, program))
+    } else {
+        Err(Failure {
             loaded: Some(loaded),
             errors,
-        }),
+        })
     }
 }
 

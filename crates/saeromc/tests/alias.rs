@@ -43,7 +43,7 @@ fn appending_never_changes_another_name() {
 
 #[test]
 fn appending_in_a_loop_still_works() {
-    let source = "답은 \"\"이다.\n1부터 3까지의 자리마다 반복한다:\n    답은 답에 \"가\"를 더한 값이다.\n답을 출력한다.\n";
+    let source = "답은 \"\"이다.\n1부터 3까지 자리마다 반복한다:\n    답은 답에 \"가\"를 더한 값이다.\n답을 출력한다.\n";
     assert_eq!(common::build_and_run(source, "alias_loop"), "가가가");
 }
 

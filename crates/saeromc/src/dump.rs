@@ -96,7 +96,6 @@ fn marker_name(marker: Marker) -> &'static str {
         Marker::Case(particle) => particle,
         Marker::Bare => "-",
         Marker::Module => "모듈",
-        Marker::Step => "간격",
     }
 }
 

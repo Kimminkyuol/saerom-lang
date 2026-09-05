@@ -18,33 +18,23 @@ pub const PARTICLES: &[(&str, &str, &str)] = &[
     ("보다", "comparative", "보다"),
     ("마다", "distributive", "마다"),
     ("만큼", "quantity", "만큼"),
+    ("씩", "step", "씩"),
     ("부터", "from", "부터"),
     ("까지", "to", "까지"),
     ("와", "conj", "와"),
     ("과", "conj", "와"),
 ];
 
-const RANGE_TAILS: &[&str] = &["의", "에", "를", "을"];
-
 pub fn particles_by_length() -> Vec<(String, &'static str, &'static str)> {
     let mut all: Vec<(String, &'static str, &'static str)> = PARTICLES
         .iter()
         .map(|&(form, role, canon)| (form.to_string(), role, canon))
         .collect();
-    for &(form, role, canon) in PARTICLES {
-        if role == "from" || role == "to" {
-            all.extend(
-                RANGE_TAILS
-                    .iter()
-                    .map(|t| (format!("{form}{t}"), role, canon)),
-            );
-        }
-    }
     all.sort_by_key(|(form, _, _)| std::cmp::Reverse(form.chars().count()));
     all
 }
 
-pub const STRUCTURAL: &[&str] = &["마다", "부터", "까지", "간격", "모듈"];
+pub const STRUCTURAL: &[&str] = &["마다", "부터", "까지", "씩", "모듈"];
 
 pub const FIELDS: &[&str] = &["자료형", "길이", "명칭"];
 
@@ -57,7 +47,6 @@ pub const KEYWORDS: &[&str] = &[
     "거짓",
     "없음",
     "묶음",
-    "간격",
 ];
 
 pub const HADA_FORMS: &[(&str, Ending)] = &[

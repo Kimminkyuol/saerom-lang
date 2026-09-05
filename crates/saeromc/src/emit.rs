@@ -223,6 +223,7 @@ declare void @sr_stop(ptr)
 declare void @sr_clone(ptr, ptr)
 declare void @sr_finish()
 declare void @sr_drop(ptr)
+declare void @sr_bad_step()
 declare void @sr_stack_base()
 declare void @sr_stack_check()
 declare void @sr_sources(ptr, i64, i8)
@@ -1092,7 +1093,7 @@ impl<'a> Emitter<'a> {
         let kind = self.program.functions[func as usize].kind;
         let ty = self.types.returns[func as usize];
         let needed = match kind {
-            Kind::Noun => matches!(ty, Ty::Any | Ty::Nothing | Ty::Never),
+            Kind::Noun => matches!(ty, Ty::Any | Ty::Nothing | Ty::Maybe | Ty::Never),
             Kind::Verb => false,
         };
         if !needed {
@@ -1133,10 +1134,19 @@ impl<'a> Emitter<'a> {
                 if self.append_in_place(*place, value) {
                     return;
                 }
-                self.mutable_str = self.reuse.allows(self.current, *place);
-                let value = self.expr(value);
+                let owns = self.reuse.owns(self.current, *place);
+                // 슬롯에 바로 들어가는 리터럴만 캐시를 피한다. 중첩된 리터럴은
+                // 어떤 연산이 삼키고 새 값을 내므로 캐시해도 된다.
+                self.mutable_str = (owns || self.reuse.allows(self.current, *place))
+                    && matches!(value, Expr::Str(_));
+                let made = self.expr(value);
                 self.mutable_str = false;
-                self.write_place(*place, value);
+                // 이 자리가 값을 혼자 쥐고 있으면 옛 값을 여기서 놓아준다.
+                if owns {
+                    let holder = self.place_ptr(*place);
+                    self.line(&format!("call void @sr_drop(ptr {holder})"));
+                }
+                self.write_place(*place, made);
             }
             Stmt::SetField {
                 owner,
@@ -1409,26 +1419,19 @@ impl<'a> Emitter<'a> {
             Some(found) => self.value(found, Repr::Word),
             None => "1".to_string(),
         };
-        let negated = self.temp();
-        self.line(&format!("{negated} = sub i64 0, {by}"));
-        let downward = self.temp();
-        self.line(&format!("{downward} = icmp slt i64 {by}, 0"));
-        let size = self.temp();
-        self.line(&format!(
-            "{size} = select i1 {downward}, i64 {negated}, i64 {by}"
-        ));
+        // 방향은 간격의 부호가 정한다.
         let idle = self.temp();
-        self.line(&format!("{idle} = icmp eq i64 {size}, 0"));
-        let width = self.temp();
-        self.line(&format!("{width} = select i1 {idle}, i64 1, i64 {size}"));
+        self.line(&format!("{idle} = icmp eq i64 {by}, 0"));
+        let stop_here = self.label("badstep");
+        let go = self.label("step");
+        self.line(&format!("br i1 {idle}, label %{stop_here}, label %{go}"));
+        self.mark(&stop_here);
+        self.line("call void @sr_bad_step()");
+        self.line(&format!("br label %{go}"));
+        self.mark(&go);
         let back = self.temp();
-        self.line(&format!("{back} = icmp sgt i64 {from}, {to}"));
-        let fall = self.temp();
-        self.line(&format!("{fall} = sub i64 0, {width}"));
-        let delta = self.temp();
-        self.line(&format!(
-            "{delta} = select i1 {back}, i64 {fall}, i64 {width}"
-        ));
+        self.line(&format!("{back} = icmp slt i64 {by}, 0"));
+        let delta = by.clone();
 
         let counter = self.raw("i64");
         self.line(&format!("store i64 {from}, ptr {counter}, align 8"));

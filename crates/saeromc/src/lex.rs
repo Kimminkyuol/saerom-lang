@@ -288,6 +288,15 @@ impl Lexer<'_> {
             return one(Tok::Number(number(chunk, line, col, end)?));
         }
         if splitting.take_particle {
+            // `까지의`는 이름으로 뭉쳐 버려서 오류가 엉뚱한 곳을 가리킨다.
+            for tail in ["부터의", "까지의"] {
+                if body_before(chunk, tail).is_some() {
+                    return Err(Diag::lex(
+                        msg::RANGE_GENITIVE,
+                        Span::new(line, end - tail.chars().count(), end),
+                    ));
+                }
+            }
             for (form, role, canon) in words::particles_by_length() {
                 if let Some(head) = body_before(chunk, form.as_ref()) {
                     let cut = end - form.chars().count();

@@ -12,11 +12,18 @@ enum Key {
 #[derive(Default)]
 pub struct Reuse {
     kept: HashSet<Key>,
+    owned: HashSet<Key>,
 }
 
 impl Reuse {
+    // 제자리 잇기를 해도 되는 자리 (문자열 누적)
     pub fn allows(&self, function: Option<FuncId>, place: Place) -> bool {
         key_of(function, place).is_some_and(|key| self.kept.contains(&key))
+    }
+
+    // 값을 혼자 쥐고 있는 자리. 덮어쓸 때 옛 값을 놓아줘도 된다.
+    pub fn owns(&self, function: Option<FuncId>, place: Place) -> bool {
+        key_of(function, place).is_some_and(|key| self.owned.contains(&key))
     }
 }
 
@@ -39,6 +46,8 @@ fn place_of(expr: &Expr) -> Option<Place> {
 struct Scan {
     gone: HashSet<Key>,
     stale: HashSet<Key>,
+    // 순회 대상. 몸통 안에서 덮어쓰면 돌고 있는 것을 놓아주게 된다.
+    walked: HashSet<Key>,
     seen: HashMap<Key, bool>,
 }
 
@@ -54,31 +63,41 @@ pub fn find(program: &Program, types: &Types) -> Reuse {
         }
         scan.block(Some(id), &function.body);
     }
+    let alone = |key: Key, holds: bool| {
+        holds
+            && !scan.gone.contains(&key)
+            && !scan.stale.contains(&key)
+            && !scan.walked.contains(&key)
+    };
     let kept = scan
         .seen
-        .into_iter()
-        .filter(|&(key, holds)| {
-            holds
-                && !scan.gone.contains(&key)
-                && !scan.stale.contains(&key)
-                && str_key(types, key)
-        })
-        .map(|(key, _)| key)
+        .iter()
+        .filter(|&(&key, &holds)| alone(key, holds) && ty_of(types, key) == Ty::Str)
+        .map(|(&key, _)| key)
         .collect();
-    Reuse { kept }
+    let owned = scan
+        .seen
+        .iter()
+        .filter(|&(&key, &holds)| {
+            alone(key, holds) && matches!(ty_of(types, key), Ty::Str | Ty::Table)
+        })
+        .map(|(&key, _)| key)
+        .collect();
+    Reuse { kept, owned }
 }
 
-fn str_key(types: &Types, key: Key) -> bool {
+fn ty_of(types: &Types, key: Key) -> Ty {
     let (function, place) = match key {
         Key::Global(slot) => (None, Place::Global(slot)),
         Key::Local(id, slot) => (Some(id), Place::Local(slot)),
     };
-    types.place(function, place) == Ty::Str
+    types.place(function, place)
 }
 
+// 새 값을 만드는가. 복사하다는 뺀다 — 문자열이면 같은 값을 그대로 돌려준다.
 fn makes_fresh(expr: &Expr) -> bool {
     match expr {
-        Expr::Str(_) | Expr::Template(_) => true,
+        Expr::Str(_) | Expr::Template(_) | Expr::Table(..) => true,
         Expr::Call {
             callee: Callee::Op(op),
             ..
@@ -127,6 +146,9 @@ impl Scan {
             } => {
                 if let Some(key) = key_of(function, *place) {
                     self.stale.insert(key);
+                }
+                if let Some(key) = place_of(over).and_then(|found| key_of(function, found)) {
+                    self.walked.insert(key);
                 }
                 self.expr(function, over, false);
                 self.block(function, body);

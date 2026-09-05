@@ -21,6 +21,30 @@ pub fn aborting(count: usize) -> String {
 
 // ── 오류 경로 추적 ─────────────────────────────────────────────
 
+pub const RANGE_GENITIVE: &str = "범위 조사 뒤에 '의' 사용할 수 없음";
+
+pub const ZERO_STEP: &str = "반복 간격이 0";
+
+pub const OWNER: &str = "소유자";
+pub const PLACE: &str = "자리";
+pub const RANGE_BOUND: &str = "반복 범위";
+
+pub fn may_be_nothing(what: &str) -> String {
+    format!("{what}가 없음일 수 있음")
+}
+
+pub fn argument_of(verb: &str) -> String {
+    format!("'{verb}'의 인자")
+}
+
+pub fn want_verb_name(name: &str) -> String {
+    format!("'{name}에 동사 오지 않음")
+}
+
+pub const TOO_MANY_SPECIAL: &str = "동사 특수화 홧수가 최대 허용치를 초과함";
+
+pub const SHRANK: &str = "반복 도중 묶음이 수정됨";
+
 pub const STACK_DEEP: &str = "최대 재귀 깊이에 도달함";
 
 pub const TRACE: &str = "오류 경로 추적:";

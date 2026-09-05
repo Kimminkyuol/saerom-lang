@@ -2,6 +2,7 @@ use crate::msg;
 use crate::report::{self, Report};
 use crate::text::{show, to_text, write_text};
 use crate::value::*;
+use std::cell::UnsafeCell;
 use std::io::Write;
 
 pub type Nouns = Option<
@@ -313,8 +314,11 @@ pub unsafe extern "C" fn sr_remove_key(table: *const Value, key: *const Value) {
 #[no_mangle]
 pub unsafe extern "C" fn sr_drop(value: *mut Value) {
     let held = &mut *value;
-    if held.tag == STR {
-        drop(Box::from_raw(held.bits as *mut String));
+    match held.tag {
+        STR => drop(Box::from_raw(held.bits as *mut String)),
+        // 겉 상자만 놓아준다. 안의 값은 따로 쥐고 있을 수 있다.
+        TABLE => drop(Box::from_raw(held.bits as *mut UnsafeCell<Table>)),
+        _ => {}
     }
     *held = Value::nothing();
 }
@@ -816,7 +820,12 @@ pub unsafe extern "C" fn sr_table_len(found: *const Value) -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_table_get(out: *mut Value, found: *const Value, index: i64) {
-    *out = at(found).as_table().items[index as usize];
+    let items = &at(found).as_table().items;
+    match items.get(index as usize) {
+        Some(found) => *out = *found,
+        // 고리가 길이를 미리 재 두므로, 도는 중에 줄면 여기로 온다.
+        None => fail(msg::VALUE, msg::SHRANK.to_string()),
+    }
 }
 
 #[no_mangle]
@@ -831,11 +840,12 @@ pub unsafe extern "C" fn sr_range(
     numbers("반복하다", [step, step]);
     let whole = start.tag == INT && stop.tag == INT && step.tag == INT;
     let (from, to) = (start.number_value(), stop.number_value());
-    let mut by = step.number_value().abs();
+    // 방향은 간격의 부호가 정한다. `1부터 0까지`는 한 번도 안 돈다.
+    let by = step.number_value();
     if by == 0.0 {
-        by = 1.0;
+        fail(msg::VALUE, msg::ZERO_STEP.to_string());
     }
-    let down = from > to;
+    let down = by < 0.0;
     let mut made = Vec::new();
     let mut now = from;
     while if down { now >= to } else { now <= to } {
@@ -844,9 +854,14 @@ pub unsafe extern "C" fn sr_range(
         } else {
             Value::float(now)
         });
-        now += if down { -by } else { by };
+        now += by;
     }
     *out = Value::items(made);
+}
+
+#[no_mangle]
+pub extern "C" fn sr_bad_step() -> ! {
+    fail(msg::VALUE, msg::ZERO_STEP.to_string())
 }
 
 #[no_mangle]
@@ -887,7 +902,7 @@ pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *cons
             use std::os::unix::io::IntoRawFd;
             Value::int(file.into_raw_fd() as i64)
         }
-        Err(_) => Value::int(-1),
+        Err(_) => Value::nothing(),
     };
 }
 
@@ -907,7 +922,15 @@ pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *co
     flush_out();
     let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
     let mut buffer = vec![0u8; want];
-    let read = held.read(&mut buffer).unwrap_or(0);
+    // 실패도 파일 끝도 없음이다. 빈 글과 섞이면 가릴 수 없다.
+    let Ok(read) = held.read(&mut buffer) else {
+        *out = Value::nothing();
+        return;
+    };
+    if read == 0 && want > 0 {
+        *out = Value::nothing();
+        return;
+    }
     buffer.truncate(read);
     *out = Value::text(String::from_utf8_lossy(&buffer).into_owned());
 }
@@ -925,7 +948,7 @@ pub unsafe extern "C" fn sr_write(out: *mut Value, file: *const Value, text: *co
     let _ = held.flush();
     *out = match written {
         Ok(count) => Value::int(count as i64),
-        Err(_) => Value::int(-1),
+        Err(_) => Value::nothing(),
     };
 }
 

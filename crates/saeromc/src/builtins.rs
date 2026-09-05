@@ -91,6 +91,13 @@ fn leak(markers: Vec<Marker>) -> &'static [Marker] {
     Vec::leak(markers)
 }
 
+pub fn named(op: Builtin) -> &'static str {
+    table()
+        .iter()
+        .find(|def| def.op == op)
+        .map_or("내장", |def| def.verb)
+}
+
 pub fn find(verb: &str, used: &[Marker]) -> Option<&'static Def> {
     table().iter().find(|def| {
         def.verb == verb && crate::sig::fits(used, def.params) && used.len() == def.params.len()
