@@ -1,0 +1,270 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "새롬",
+  "scopeName": "source.saerom",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#keyword"
+    },
+    {
+      "include": "#comparative"
+    },
+    {
+      "include": "#definition"
+    },
+    {
+      "include": "#field"
+    },
+    {
+      "include": "#index"
+    },
+    {
+      "include": "#verb-final"
+    },
+    {
+      "include": "#verb-clause"
+    },
+    {
+      "include": "#copula"
+    },
+    {
+      "include": "#verb-adnominal"
+    },
+    {
+      "include": "#verb-ji"
+    },
+    {
+      "include": "#verb-link"
+    },
+    {
+      "include": "#call-tail"
+    },
+    {
+      "include": "#particle"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.saerom",
+      "match": "#.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.saerom",
+      "begin": "\"",
+      "end": "\"|$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.saerom"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.saerom"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.saerom",
+          "match": "\\\\."
+        },
+        {
+          "name": "meta.embedded.line.saerom",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.saerom"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.saerom"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#number"
+            },
+            {
+              "include": "#keyword"
+            },
+            {
+              "include": "#comparative"
+            },
+            {
+              "include": "#field"
+            },
+            {
+              "include": "#index"
+            },
+            {
+              "include": "#copula"
+            },
+            {
+              "include": "#verb-adnominal"
+            },
+            {
+              "include": "#verb-ji"
+            },
+            {
+              "include": "#verb-link"
+            },
+            {
+              "include": "#call-tail"
+            },
+            {
+              "include": "#particle"
+            },
+            {
+              "include": "#punctuation"
+            }
+          ]
+        }
+      ]
+    },
+    "number": {
+      "match": "(?<![가-힣0-9A-Za-z_])(-?\\d+(?:\\.\\d+)?)((?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)+)?(?![가-힣0-9A-Za-z_])",
+      "captures": {
+        "1": {
+          "name": "constant.numeric.saerom"
+        },
+        "2": {
+          "name": "storage.modifier.particle.saerom"
+        }
+      }
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "match": "(?<![가-힣0-9A-Za-z_])(만약|아니고|아니면|동안|그리고|또는)(?![가-힣0-9A-Za-z_])",
+          "name": "keyword.control.saerom"
+        },
+        {
+          "match": "(?<![가-힣0-9A-Za-z_])(참|거짓|없음)((?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)+)?(?![가-힣0-9A-Za-z_])",
+          "captures": {
+            "1": {
+              "name": "constant.language.saerom"
+            },
+            "2": {
+              "name": "storage.modifier.particle.saerom"
+            }
+          }
+        },
+        {
+          "match": "(?<![가-힣0-9A-Za-z_])(묶음)((?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)+)?(?![가-힣0-9A-Za-z_])",
+          "captures": {
+            "1": {
+              "name": "support.type.saerom"
+            },
+            "2": {
+              "name": "storage.modifier.particle.saerom"
+            }
+          }
+        }
+      ]
+    },
+    "comparative": {
+      "match": "(?<![가-힣0-9A-Za-z_])(이상|이하|초과|미만)(?=이다|이면|인지|이고|[^가-힣0-9A-Za-z_]|$)",
+      "name": "keyword.control.comparison.saerom"
+    },
+    "definition": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]+?)(이라는|라는)[ ]+(것은)(?=[ ]*:)",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.saerom"
+        },
+        "2": {
+          "name": "storage.modifier.copula.saerom"
+        },
+        "3": {
+          "name": "keyword.control.definition.saerom"
+        }
+      }
+    },
+    "field": {
+      "match": "(?<![가-힣0-9A-Za-z_])(자료형|길이|명칭)((?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)+)?(?![가-힣0-9A-Za-z_])",
+      "captures": {
+        "1": {
+          "name": "support.variable.property.saerom"
+        },
+        "2": {
+          "name": "storage.modifier.particle.saerom"
+        }
+      }
+    },
+    "index": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]*?)(번째)((?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)+)?(?![가-힣0-9A-Za-z_])",
+      "captures": {
+        "2": {
+          "name": "support.variable.property.saerom"
+        },
+        "3": {
+          "name": "storage.modifier.particle.saerom"
+        }
+      }
+    },
+    "verb-final": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]+)(?=[ ]*\\.)",
+      "name": "entity.name.function.saerom"
+    },
+    "verb-clause": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]+)(?=[ ]*:)",
+      "name": "entity.name.function.saerom"
+    },
+    "copula": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]*?)(이라는|라는|이거나|인지|이다|이면|이고|인)(?![가-힣0-9A-Za-z_])",
+      "captures": {
+        "2": {
+          "name": "storage.modifier.copula.saerom"
+        }
+      }
+    },
+    "particle": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]*?)(에게|에서|으로|보다|만큼|부터|까지|마다|은|는|이|가|을|를|에|로|의|와|과|씩)(?![가-힣0-9A-Za-z_])",
+      "captures": {
+        "2": {
+          "name": "storage.modifier.particle.saerom"
+        }
+      }
+    },
+    "punctuation": {
+      "match": "[.:()]",
+      "name": "punctuation.separator.saerom"
+    },
+    "call-tail": {
+      "match": "(?<![가-힣0-9A-Za-z_])(값|몫|나머지)((?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)+)?(?![가-힣0-9A-Za-z_])",
+      "captures": {
+        "1": {
+          "name": "support.variable.property.saerom"
+        },
+        "2": {
+          "name": "storage.modifier.particle.saerom"
+        }
+      }
+    },
+    "verb-adnominal": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]+)(?=[ ]+(?:값|몫|나머지)(?:이라는|이거나|에게|에서|으로|보다|만큼|부터|까지|마다|인지|이다|이면|이고|라는|은|는|이|가|을|를|에|로|의|와|과|씩|인)?(?![가-힣0-9A-Za-z_]))",
+      "name": "entity.name.function.saerom"
+    },
+    "verb-ji": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]*?[^까])(지)(?![가-힣0-9A-Za-z_])",
+      "name": "entity.name.function.saerom"
+    },
+    "verb-link": {
+      "match": "(?<![가-힣0-9A-Za-z_])([가-힣0-9A-Za-z_]+?)(거나|고)(?![가-힣0-9A-Za-z_])",
+      "name": "entity.name.function.saerom"
+    }
+  }
+}

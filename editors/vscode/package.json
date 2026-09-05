@@ -1,0 +1,27 @@
+{
+  "name": "saerom",
+  "displayName": "새롬",
+  "description": "새롬 언어 문법 강조",
+  "version": "0.1.0",
+  "publisher": "saerom",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "saerom",
+        "aliases": ["새롬", "saerom"],
+        "extensions": [".sr"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "saerom",
+        "scopeName": "source.saerom",
+        "path": "./syntaxes/saerom.tmLanguage.json"
+      }
+    ]
+  }
+}
