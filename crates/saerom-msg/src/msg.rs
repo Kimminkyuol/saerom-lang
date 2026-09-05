@@ -328,7 +328,7 @@ pub fn not_descriptor(verb: &str, shown: &str) -> String {
 pub const USAGE: &str = "\
 새롬
 
-  saeromc <파일.sr> [-o <출력>] [-O2] [-g]
+  saeromc <파일.sr> [-o <출력>] [-O0] [-g]
   saeromc --check <파일.sr>
   saeromc --emit-llvm <파일.sr>
 ";

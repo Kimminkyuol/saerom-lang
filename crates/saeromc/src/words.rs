@@ -25,13 +25,14 @@ pub const PARTICLES: &[(&str, &str, &str)] = &[
     ("과", "conj", "와"),
 ];
 
-pub fn particles_by_length() -> Vec<(String, &'static str, &'static str)> {
-    let mut all: Vec<(String, &'static str, &'static str)> = PARTICLES
-        .iter()
-        .map(|&(form, role, canon)| (form.to_string(), role, canon))
-        .collect();
-    all.sort_by_key(|(form, _, _)| std::cmp::Reverse(form.chars().count()));
-    all
+// 긴 조사부터 본다. 어휘 분석의 뜨거운 자리라 한 번만 짓는다.
+pub fn particles_by_length() -> &'static [(&'static str, &'static str, &'static str)] {
+    static SORTED: OnceLock<Vec<(&str, &str, &str)>> = OnceLock::new();
+    SORTED.get_or_init(|| {
+        let mut all = PARTICLES.to_vec();
+        all.sort_by_key(|(form, _, _)| std::cmp::Reverse(form.chars().count()));
+        all
+    })
 }
 
 pub const STRUCTURAL: &[&str] = &["마다", "부터", "까지", "씩", "모듈"];

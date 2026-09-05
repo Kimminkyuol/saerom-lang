@@ -1,856 +1,13 @@
-use crate::ast::*;
-use crate::diag::{Diag, Result, Span};
-use crate::hangul::{Ending, Pos};
-use crate::lex::{tokenize, Num, Part, Tok, Token};
-use crate::msg;
-use crate::prescan::{resolve_module, Program};
-use crate::sig::Marker;
-use crate::words;
-use std::path::Path;
+//! 문장.
 
-const MAX_ERRORS: usize = 20;
-
-pub struct Parsed {
-    pub statements: Vec<Stmt>,
-    pub errors: Vec<Diag>,
-}
-
-pub fn parse<'a>(
-    tokens: &'a [Token],
-    program: &'a Program,
-    base_dir: Option<&'a Path>,
-) -> Parsed {
-    let mut parser = Parser {
-        tokens,
-        at: 0,
-        program,
-        base_dir,
-        errors: Vec::new(),
-        inside: false,
-        plan: Vec::new(),
-        picks: Vec::new(),
-        stuck: false,
-    };
-    let statements = parser.program();
-    Parsed {
-        statements,
-        errors: parser.errors,
-    }
-}
-
-struct Parser<'a> {
-    tokens: &'a [Token],
-    at: usize,
-    program: &'a Program,
-    base_dir: Option<&'a Path>,
-    errors: Vec<Diag>,
-    inside: bool,
-    // 용언마다 "몇 번째로 긴 묶기를 고를지". 되짚기가 이 벡터를 돌린다.
-    plan: Vec<usize>,
-    picks: Vec<usize>,
-    stuck: bool,
-}
-
-#[derive(Clone)]
-struct VerbInfo {
-    name: String,
-    pos: Pos,
-    ending: Ending,
-    negated: bool,
-    span: Span,
-}
+use super::*;
 
 impl<'a> Parser<'a> {
-    fn peek(&self) -> &'a Tok {
-        &self.ahead(0).tok
-    }
-
-    fn ahead(&self, offset: usize) -> &'a Token {
-        let index = (self.at + offset).min(self.tokens.len() - 1);
-        &self.tokens[index]
-    }
-
-    fn span(&self) -> Span {
-        self.ahead(0).span
-    }
-
-    fn advance(&mut self) -> &'a Token {
-        let token = self.ahead(0);
-        self.at += 1;
-        token
-    }
-
-    fn at_symbol(&self, offset: usize, ch: char) -> bool {
-        self.ahead(offset).tok == Tok::Symbol(ch)
-    }
-
-    fn accept(&mut self, wanted: &Tok) -> bool {
-        if self.peek() == wanted {
-            self.at += 1;
-            return true;
-        }
-        false
-    }
-
-    fn expect(&mut self, wanted: &Tok, what: &str) -> Result<&'a Token> {
-        if self.peek() == wanted {
-            return Ok(self.advance());
-        }
-        let token = self.ahead(0);
-        if matches!(token.tok, Tok::Newline | Tok::Eof) {
-            return Err(Diag::syntax(msg::line_ended(what), token.span));
-        }
-        Err(Diag::syntax(
-            msg::not_wanted(what, &describe(&token.tok)),
-            token.span,
-        ))
-    }
-
-    fn expect_name(&mut self) -> Result<(String, Span)> {
-        match self.peek() {
-            Tok::Name(name) => {
-                let name = name.clone();
-                Ok((name, self.advance().span))
-            }
-            other => Err(Diag::syntax(msg::not_a_name(&describe(other)), self.span())),
-        }
-    }
-
-    fn expect_particle(&mut self) -> Result<&'static str> {
-        match self.peek() {
-            Tok::Particle { canon, .. } => {
-                let canon = *canon;
-                self.at += 1;
-                Ok(canon)
-            }
-            other => Err(Diag::syntax(
-                msg::not_a_particle(&describe(other)),
-                self.span(),
-            )),
-        }
-    }
-
-    fn line_end(&self) -> usize {
-        let mut index = self.at;
-        while index < self.tokens.len() && self.tokens[index].tok != Tok::Newline {
-            index += 1;
-        }
-        index
-    }
-
-    fn resync(&mut self) {
-        // 들여쓰기 경계는 넘지 않는다. 넘으면 다음 줄까지 통째로 먹는다.
-        while !matches!(self.peek(), Tok::Eof | Tok::Indent(_) | Tok::Dedent(_)) {
-            let done = matches!(self.peek(), Tok::Newline);
-            self.at += 1;
-            if done {
-                break;
-            }
-        }
-        let mut depth = 0usize;
-        loop {
-            match self.peek() {
-                Tok::Indent(_) => depth += 1,
-                Tok::Dedent(_) if depth > 0 => depth -= 1,
-                Tok::Eof => return,
-                _ if depth == 0 => return,
-                _ => {}
-            }
-            self.at += 1;
-        }
-    }
-
-    fn note(&mut self, error: Diag) {
-        if self.errors.len() < MAX_ERRORS {
-            self.errors.push(error);
-        }
-    }
-
-    fn program(&mut self) -> Vec<Stmt> {
-        let mut statements = Vec::new();
-        while !matches!(self.peek(), Tok::Eof) {
-            if self.accept(&Tok::Newline) {
-                continue;
-            }
-            match self.replanned(Self::statement) {
-                Ok(statement) => statements.push(statement),
-                Err(error) => {
-                    self.note(error);
-                    self.resync();
-                }
-            }
-        }
-        statements
-    }
-
-    // 묶기를 잘못 고르면 뒤에서야 드러난다. 걸리면 다른 묶기로 다시 읽는다.
-    fn replanned<T>(&mut self, run: fn(&mut Self) -> Result<T>) -> Result<T> {
-        let (start, errors, inside) = (self.at, self.errors.len(), self.inside);
-        // 안쪽 되짚기가 바깥 것의 상태를 건드리지 않게 따로 둔다.
-        let held = (
-            std::mem::take(&mut self.plan),
-            std::mem::take(&mut self.picks),
-            self.stuck,
-        );
-        let made = self.replan_pass(run, start, errors, inside);
-        (self.plan, self.picks, self.stuck) = held;
-        made
-    }
-
-    fn replan_pass<T>(
-        &mut self,
-        run: fn(&mut Self) -> Result<T>,
-        start: usize,
-        errors: usize,
-        inside: bool,
-    ) -> Result<T> {
-        let mut plan: Vec<usize> = Vec::new();
-        for _ in 0..32 {
-            self.at = start;
-            self.errors.truncate(errors);
-            self.inside = inside;
-            self.plan.clone_from(&plan);
-            self.picks.clear();
-            self.stuck = false;
-            let made = run(self);
-            if made.is_ok() && !self.stuck {
-                return made;
-            }
-            let counts = std::mem::take(&mut self.picks);
-            if !bump(&mut plan, &counts) {
-                break;
-            }
-        }
-        self.at = start;
-        self.errors.truncate(errors);
-        self.inside = inside;
-        self.plan.clear();
-        self.picks.clear();
-        self.stuck = false;
-        run(self)
-    }
-
-
-    fn block(&mut self) -> Result<Block> {
-        self.expect(&Tok::Symbol(':'), msg::WANT_COLON)?;
-        self.expect(&Tok::Newline, msg::WANT_NEWLINE)?;
-        if !matches!(self.peek(), Tok::Indent(_)) {
-            return Err(Diag::syntax(msg::NO_BLOCK, self.span()));
-        }
-        self.at += 1;
-        let mut statements = Vec::new();
-        loop {
-            match self.peek() {
-                Tok::Dedent(_) | Tok::Eof => break,
-                Tok::Newline => {
-                    self.at += 1;
-                }
-                _ => match self.replanned(Self::statement) {
-                    Ok(statement) => statements.push(statement),
-                    Err(error) => {
-                        self.note(error);
-                        self.resync();
-                    }
-                },
-            }
-        }
-        if matches!(self.peek(), Tok::Dedent(_)) {
-            self.at += 1;
-        }
-        Ok(statements)
-    }
-}
-
-fn exact(used: &[Marker], way: &[Marker]) -> bool {
-    if used.len() != way.len() {
-        return false;
-    }
-    let (mut a, mut b) = (used.to_vec(), way.to_vec());
-    a.sort_unstable();
-    b.sort_unstable();
-    a == b
-}
-
-// 계수기처럼 한 칸 올린다. 더 돌릴 데가 없으면 거짓.
-fn bump(plan: &mut Vec<usize>, counts: &[usize]) -> bool {
-    plan.resize(counts.len(), 0);
-    for at in (0..counts.len()).rev() {
-        if plan[at] + 1 < counts[at] {
-            plan[at] += 1;
-            plan[at + 1..].fill(0);
-            return true;
-        }
-    }
-    false
-}
-
-fn describe(tok: &Tok) -> String {
-    match tok {
-        Tok::Name(name) => format!("{} '{name}'", msg::TOK_NAME),
-        Tok::Verb { name, .. } => format!("{} '{name}'", msg::TOK_VERB),
-        Tok::Copula { .. } => msg::TOK_COPULA.into(),
-        Tok::Particle { canon, .. } => format!("{} '{canon}'", msg::TOK_PARTICLE),
-        Tok::Keyword(word) => format!("{} '{word}'", msg::TOK_KEYWORD),
-        Tok::Number(Num::Int(value)) => format!("{} '{value}'", msg::TOK_NUMBER),
-        Tok::Number(Num::Float(value)) => format!("{} '{value}'", msg::TOK_NUMBER),
-        Tok::Str(_) | Tok::Template(_) => msg::TOK_STRING.into(),
-        Tok::Symbol(ch) => format!("{} '{ch}'", msg::TOK_SYMBOL),
-        Tok::Indent(_) => msg::TOK_INDENT.into(),
-        Tok::Dedent(_) => msg::TOK_DEDENT.into(),
-        Tok::Newline => msg::TOK_NEWLINE.into(),
-        Tok::Eof => msg::TOK_EOF.into(),
-    }
-}
-
-fn starts_value(tok: &Tok) -> bool {
-    match tok {
-        Tok::Number(_) | Tok::Str(_) | Tok::Template(_) | Tok::Name(_) => true,
-        Tok::Keyword(word) => {
-            matches!(word.as_str(), "참" | "거짓" | "없음" | "묶음")
-        }
-        Tok::Symbol(ch) => *ch == '(',
-        _ => false,
-    }
-}
-
-fn ending_label(ending: Ending) -> &'static str {
-    match ending {
-        Ending::Final => "-ㄴ다",
-        Ending::AdnominalPast => "-ㄴ",
-        Ending::AdnominalPres => "-는",
-        Ending::Conditional => "-면",
-        Ending::Conjunctive => "-고",
-        Ending::Alternative => "-거나",
-        Ending::Interrogative => "-ㄴ지",
-        Ending::Auxiliary => msg::END_AUXILIARY,
-        Ending::Negative => "-지",
-        Ending::Quotative => "-라는",
-    }
-}
-
-fn join_and(left: Option<Expr>, right: Expr, span: Span) -> Expr {
-    match left {
-        None => right,
-        Some(before) => Expr::And {
-            left: Box::new(before),
-            right: Box::new(right),
-            span,
-        },
-    }
-}
-
-fn join_or(apart: Vec<Expr>, span: Span) -> Expr {
-    apart
-        .into_iter()
-        .reduce(|before, next| Expr::Or {
-            left: Box::new(before),
-            right: Box::new(next),
-            span,
-        })
-        .expect("조건")
-}
-
-fn carry_subject(slots: &mut Vec<Slot>, subject: &mut Option<Expr>) {
-    if !slots.iter().any(|slot| slot.marker == Marker::Case("가")) {
-        if let Some(found) = subject.clone() {
-            slots.insert(
-                0,
-                Slot {
-                    marker: Marker::Case("가"),
-                    expr: found,
-                },
-            );
-        }
-    }
-    for slot in slots.iter() {
-        if slot.marker == Marker::Case("가") {
-            *subject = Some(slot.expr.clone());
-        }
-    }
-}
-
-fn copula_slots(mut slots: Vec<Slot>) -> Vec<Slot> {
-    let subjects: Vec<usize> = slots
-        .iter()
-        .enumerate()
-        .filter(|(_, slot)| slot.marker == Marker::Case("가"))
-        .map(|(index, _)| index)
-        .collect();
-    if let (true, Some(&last)) = (subjects.len() >= 2, subjects.last()) {
-        slots[last].marker = Marker::Bare;
-    }
-    slots
-}
-
-fn fold_comparison(slots: Vec<Slot>, info: VerbInfo) -> (Vec<Slot>, VerbInfo) {
-    if info.name != "이다" || slots.len() < 2 {
-        return (slots, info);
-    }
-    let marker = slots[slots.len() - 1].marker;
-    if !matches!(marker, Marker::Bare | Marker::Case("가"))
-        || slots[slots.len() - 2].marker != Marker::Bare
-    {
-        return (slots, info);
-    }
-    let Some(word) = slots[slots.len() - 1].expr.as_name() else {
-        return (slots, info);
-    };
-    let Some(&(_, verb, negated)) = words::COMPARATIVES
-        .iter()
-        .find(|&&(name, _, _)| name == word)
-    else {
-        return (slots, info);
-    };
-    let mut slots = slots;
-    slots.pop();
-    let operand = slots.pop().expect("견줄 값").expr;
-    slots.push(Slot {
-        marker: Marker::Case("보다"),
-        expr: operand,
-    });
-    let info = VerbInfo {
-        name: verb.into(),
-        negated: negated != info.negated,
-        ..info
-    };
-    (slots, info)
-}
-
-impl<'a> Parser<'a> {
-    fn take_verb(&mut self) -> Result<VerbInfo> {
-        let token = self.ahead(0);
-        let (name, pos, ending) = match &token.tok {
-            Tok::Verb { name, pos, ending } => (name.clone(), *pos, *ending),
-            Tok::Copula { ending } => ("이다".to_string(), Pos::Descriptive, *ending),
-            other => return Err(Diag::syntax(msg::not_a_verb(&describe(other)), token.span)),
-        };
-        self.at += 1;
-        if name == "아니다" {
-            let span = token.span;
-            return Ok(VerbInfo {
-                name: "이다".into(),
-                pos: Pos::Descriptive,
-                ending,
-                negated: true,
-                span,
-            });
-        }
-        if ending == Ending::Negative {
-            let partner = self.ahead(0);
-            let Tok::Verb {
-                name: helper,
-                ending: after,
-                ..
-            } = &partner.tok
-            else {
-                return Err(Diag::syntax(msg::NOT_NEGATION, partner.span));
-            };
-            if helper != "않다" {
-                return Err(Diag::syntax(msg::NOT_NEGATION, partner.span));
-            }
-            let after = *after;
-            self.at += 1;
-            return Ok(VerbInfo {
-                name,
-                pos,
-                ending: after,
-                negated: true,
-                span: token.span,
-            });
-        }
-        Ok(VerbInfo {
-            name,
-            pos,
-            ending,
-            negated: false,
-            span: token.span,
-        })
-    }
-
-    fn starts_predicate(&self, offset: usize) -> bool {
-        let Tok::Name(name) = &self.ahead(offset).tok else {
-            return false;
-        };
-        matches!(self.ahead(offset + 1).tok, Tok::Copula { .. })
-            && self.program.signatures.knows(&format!("{name}이다"))
-    }
-
-    fn chain(&mut self, value: Expr) -> Result<Expr> {
-        let mut value = value;
-        loop {
-            if !matches!(self.peek(), Tok::Particle { canon: "의", .. }) {
-                return Ok(value);
-            }
-            let span = self.ahead(1).span;
-            match &self.ahead(1).tok {
-                Tok::Name(field) => {
-                    if self.program.modules.contains(field) {
-                        return Ok(value);
-                    }
-                    if let Tok::Copula { ending } = self.ahead(2).tok {
-                        if ending != Ending::Final {
-                            return Ok(value);
-                        }
-                    }
-                    let name = field.clone();
-                    self.at += 2;
-                    value = Expr::Field {
-                        owner: Box::new(value),
-                        name,
-                        span,
-                    };
-                }
-                Tok::Str(text) => {
-                    let name = text.clone();
-                    self.at += 2;
-                    value = Expr::Field {
-                        owner: Box::new(value),
-                        name,
-                        span,
-                    };
-                }
-                Tok::Symbol('(') => {
-                    self.at += 1;
-                    let key = self.selector()?;
-                    value = self.wrap_selector(value, key, span);
-                }
-                _ => return Ok(value),
-            }
-        }
-    }
-
-    fn selector(&mut self) -> Result<Expr> {
-        let span = self.span();
-        self.at += 1;
-        let key = self.grouped(span)?;
-        self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
-        Ok(key)
-    }
-
-    fn wrap_selector(&mut self, owner: Expr, key: Expr, span: Span) -> Expr {
-        if matches!(self.peek(), Tok::Name(name) if name == "번째") {
-            self.at += 1;
-            return Expr::Spot {
-                owner: Box::new(owner),
-                place: Box::new(key),
-                span,
-            };
-        }
-        Expr::Pick {
-            owner: Box::new(owner),
-            key: Box::new(key),
-            span,
-        }
-    }
-
-    fn push(&mut self, slots: &mut Vec<Slot>, first: Expr) -> Result<()> {
-        let mut items = vec![self.chain(first)?];
-        while matches!(self.peek(), Tok::Particle { role: "conj", .. })
-            && starts_value(&self.ahead(1).tok)
-            && !self.starts_predicate(1)
-        {
-            self.at += 1;
-            let next = self.primary()?;
-            items.push(self.chain(next)?);
-        }
-        let value = if items.len() == 1 {
-            items.pop().expect("항 하나")
-        } else {
-            let span = items[0].span();
-            Expr::Table {
-                items,
-                entries: Vec::new(),
-                span,
-            }
-        };
-        let mut marker = Marker::Bare;
-        if let Tok::Particle { canon, .. } = self.peek() {
-            let canon = *canon;
-            let namespace = canon == "의"
-                && value
-                    .as_name()
-                    .is_some_and(|name| self.program.modules.contains(name));
-            self.at += 1;
-            marker = if namespace {
-                Marker::Module
-            } else {
-                Marker::Case(canon)
-            };
-        }
-        slots.push(Slot {
-            marker,
-            expr: value,
-        });
-        Ok(())
-    }
-
-    // 문장 끝 용언은 남은 자리를 다 가져간다. 조사가 안 맞으면 앞에서 잘못
-    // 묶은 것이므로 되짚기에게 알린다.
-    fn verify(&mut self, verb: &str, slots: &[Slot]) {
-        let ways = self.program.signatures.ways(verb);
-        if ways.is_empty() || verb == "이다" {
-            return;
-        }
-        let used: Vec<Marker> = slots
-            .iter()
-            .map(|slot| slot.marker)
-            .filter(|marker| *marker != Marker::Module)
-            .collect();
-        if !ways.iter().any(|way| exact(&used, way)) {
-            self.stuck = true;
-        }
-    }
-
-    fn split_slots(&mut self, verb: &str, slots: Vec<Slot>) -> (Vec<Slot>, Vec<Slot>) {
-        let ways = self.program.signatures.ways(verb);
-        let (structural, arguments): (Vec<Slot>, Vec<Slot>) = slots
-            .into_iter()
-            .partition(|slot| !slot.marker.is_argument());
-        let fixed: Vec<Marker> = structural
-            .iter()
-            .map(|slot| slot.marker)
-            .filter(|marker| *marker != Marker::Module)
-            .collect();
-        let total = arguments.len();
-        // 조사가 딱 맞는 꼬리만 후보다. 긴 것부터 담는다.
-        // 시그니처를 모르는 용언(동사 자리 매개변수 등)은 모든 길이가 후보다.
-        let blind = ways.is_empty();
-        let mut candidates: Vec<usize> = Vec::new();
-        for count in (0..=total).rev() {
-            let mut used = fixed.clone();
-            used.extend(arguments[total - count..].iter().map(|slot| slot.marker));
-            if blind || ways.iter().any(|way| exact(&used, way)) {
-                candidates.push(count);
-            }
-        }
-        let index = self.picks.len();
-        self.picks.push(candidates.len().max(1));
-        let pick = self.plan.get(index).copied().unwrap_or(0);
-        let Some(&count) = candidates.get(pick).or_else(|| candidates.first()) else {
-            // 딱 맞는 게 없다. 남은 인자를 다 준다 — 그래야 resolve 가 이 용언을
-            // 짚어 조사 오류를 낸다. 자리를 남기면 엉뚱한 데서 터진다.
-            self.stuck = true;
-            let mut taken = structural;
-            taken.extend(arguments);
-            return (Vec::new(), taken);
-        };
-        let mut taken = structural;
-        taken.extend_from_slice(&arguments[total - count..]);
-        (arguments[..total - count].to_vec(), taken)
-    }
-
-    fn reduce(&mut self, slots: Vec<Slot>, info: VerbInfo) -> Result<(Expr, Vec<Slot>)> {
-        let (kept, slots) = if info.name == "이다" || info.pos == Pos::Passive {
-            (Vec::new(), slots)
-        } else {
-            self.split_slots(&info.name, slots)
-        };
-        let (mut slots, info) = if info.name == "이다" {
-            fold_comparison(copula_slots(slots), info)
-        } else {
-            (slots, info)
-        };
-
-        let token = self.ahead(0);
-        let follows_name = matches!(token.tok, Tok::Name(_));
-        let tail = match &token.tok {
-            Tok::Name(name) if words::CALL_TAILS.contains(&name.as_str()) => Some(name.clone()),
-            _ => None,
-        };
-
-        if follows_name && tail.is_none() {
-            let (head, span) = self.expect_name()?;
-            if info.pos == Pos::Passive {
-                let head = Expr::Name { name: head, span };
-                let call = PassiveExpr {
-                    verb: info.name,
-                    head,
-                    slots,
-                    span: info.span,
-                };
-                return Ok((Expr::Passive(Box::new(call)), kept));
-            }
-            return Err(Diag::syntax(msg::not_head_value(&head), span));
-        }
-        if tail.is_some() {
-            self.at += 1;
-        }
-        if info.pos == Pos::Passive {
-            if let Some(index) = slots
-                .iter()
-                .position(|slot| slot.marker == Marker::Case("를"))
-            {
-                let head = slots.remove(index).expr;
-                let call = PassiveExpr {
-                    verb: info.name,
-                    head,
-                    slots,
-                    span: info.span,
-                };
-                return Ok((Expr::Passive(Box::new(call)), kept));
-            }
-        }
-        let call = CallExpr {
-            verb: info.name,
-            slots,
-            negated: info.negated,
-            asks: info.ending == Ending::Interrogative,
-            tail: Some(tail.unwrap_or_else(|| "값".into())),
-            span: info.span,
-        };
-        Ok((Expr::Call(Box::new(call)), kept))
-    }
-
-    fn primary(&mut self) -> Result<Expr> {
-        let token = self.ahead(0);
-        let span = token.span;
-        match &token.tok {
-            Tok::Number(Num::Int(value)) => {
-                let value = *value;
-                self.at += 1;
-                Ok(Expr::Literal {
-                    value: Literal::Int(value),
-                    span,
-                })
-            }
-            Tok::Number(Num::Float(value)) => {
-                let value = *value;
-                self.at += 1;
-                Ok(Expr::Literal {
-                    value: Literal::Float(value),
-                    span,
-                })
-            }
-            Tok::Str(text) => {
-                let text = text.clone();
-                self.at += 1;
-                Ok(Expr::Literal {
-                    value: Literal::Str(text),
-                    span,
-                })
-            }
-            Tok::Template(parts) => {
-                let parts = parts.clone();
-                self.at += 1;
-                let mut made = Vec::new();
-                for part in parts {
-                    made.push(match part {
-                        Part::Text(text) => TemplatePart::Text(text),
-                        Part::Expr { source, span } => {
-                            TemplatePart::Expr(self.fragment(&source, span)?)
-                        }
-                    });
-                }
-                Ok(Expr::Template { parts: made, span })
-            }
-            Tok::Keyword(word) if word == "참" || word == "거짓" => {
-                let value = word == "참";
-                self.at += 1;
-                Ok(Expr::Literal {
-                    value: Literal::Bool(value),
-                    span,
-                })
-            }
-            Tok::Keyword(word) if word == "없음" => {
-                self.at += 1;
-                Ok(Expr::Literal {
-                    value: Literal::Nothing,
-                    span,
-                })
-            }
-            Tok::Keyword(word) if word == "묶음" => {
-                self.at += 1;
-                Ok(Expr::Table {
-                    items: Vec::new(),
-                    entries: Vec::new(),
-                    span,
-                })
-            }
-            Tok::Name(name) => {
-                let name = name.clone();
-                self.at += 1;
-                Ok(Expr::Name { name, span })
-            }
-            Tok::Symbol('(') => {
-                self.at += 1;
-                let value = self.grouped(span)?;
-                self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
-                Ok(value)
-            }
-            // 조사와 동음인 낱말(가·는·의·로…)은 이름이 될 수 없다. 그냥 "값이 아님"
-            // 으로 흘리면 원인을 알 수 없어 따로 짚는다.
-            Tok::Particle { .. } => Err(Diag::syntax(
-                msg::not_a_value(&describe(&token.tok)),
-                span,
-            )
-            .with_hint(msg::NAME_IS_PARTICLE)),
-            other => Err(Diag::syntax(msg::not_a_value(&describe(other)), span)),
-        }
-    }
-
-    fn reduce_until(&mut self, stop: fn(&Tok) -> bool, what: &str) -> Result<Expr> {
-        let mut slots: Vec<Slot> = Vec::new();
-        loop {
-            let token = self.ahead(0);
-            if stop(&token.tok) || matches!(token.tok, Tok::Eof) {
-                if slots.len() != 1 {
-                    return Err(Diag::syntax(msg::not_one(what), token.span));
-                }
-                return Ok(slots.pop().expect("값 하나").expr);
-            }
-            if matches!(token.tok, Tok::Verb { .. } | Tok::Copula { .. }) {
-                let info = self.take_verb()?;
-                let (value, kept) = self.reduce(slots, info)?;
-                slots = kept;
-                self.push(&mut slots, value)?;
-                continue;
-            }
-            let value = self.primary()?;
-            self.push(&mut slots, value)?;
-        }
-    }
-
-    fn fragment(&mut self, source: &str, at: Span) -> Result<Expr> {
-        let tokens = tokenize(source, &self.program.vocab)
-            .map_err(|error| Diag { span: at, ..error })?;
-        let shifted: Vec<Token> = tokens
-            .into_iter()
-            .map(|token| Token {
-                tok: token.tok,
-                span: Span::new(at.line, at.col + token.span.col, at.col + token.span.end),
-            })
-            .collect();
-        let mut inner = Parser {
-            tokens: &shifted,
-            at: 0,
-            program: self.program,
-            base_dir: self.base_dir,
-            errors: Vec::new(),
-            inside: false,
-            plan: Vec::new(),
-            picks: Vec::new(),
-            stuck: false,
-        };
-        inner.replanned(|found| {
-            // 괄호 없이도 `3의 묶음` 을 받는다.
-            if found.closes_table_at(|tok| matches!(tok, Tok::Newline | Tok::Eof)) {
-                let span = found.span();
-                return found.table_body(span);
-            }
-            found.reduce_until(
-                |tok| matches!(tok, Tok::Newline | Tok::Eof),
-                msg::WANT_EMBEDDED,
-            )
-        })
-    }
-}
-
-impl<'a> Parser<'a> {
-    fn keyword_at(&self, offset: usize, word: &str) -> bool {
+    pub(super) fn keyword_at(&self, offset: usize, word: &str) -> bool {
         matches!(&self.ahead(offset).tok, Tok::Keyword(found) if found == word)
     }
 
-    fn accept_keyword(&mut self, word: &str) -> bool {
+    pub(super) fn accept_keyword(&mut self, word: &str) -> bool {
         if self.keyword_at(0, word) {
             self.at += 1;
             return true;
@@ -858,7 +15,7 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn expect_keyword(&mut self, word: &str) -> Result<()> {
+    pub(super) fn expect_keyword(&mut self, word: &str) -> Result<()> {
         if self.accept_keyword(word) {
             return Ok(());
         }
@@ -868,7 +25,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn expect_verb_named(&mut self, wanted: &str) -> Result<()> {
+    pub(super) fn expect_verb_named(&mut self, wanted: &str) -> Result<()> {
         if matches!(self.peek(), Tok::Verb { name, .. } if name == wanted) {
             self.at += 1;
             return Ok(());
@@ -879,17 +36,17 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn end_of_statement(&mut self) -> Result<()> {
+    pub(super) fn end_of_statement(&mut self) -> Result<()> {
         self.expect(&Tok::Symbol('.'), msg::WANT_PERIOD)?;
         self.expect(&Tok::Newline, msg::WANT_NEWLINE)?;
         Ok(())
     }
 
-    fn tok_at(&self, index: usize) -> &'a Tok {
+    pub(super) fn tok_at(&self, index: usize) -> &'a Tok {
         &self.tokens[index.min(self.tokens.len() - 1)].tok
     }
 
-    fn statement(&mut self) -> Result<Stmt> {
+    pub(super) fn statement(&mut self) -> Result<Stmt> {
         let token = self.ahead(0);
         if self.keyword_at(0, "만약") {
             return self.if_statement();
@@ -925,7 +82,7 @@ impl<'a> Parser<'a> {
         self.exec_or_loop()
     }
 
-    fn looks_like_definition(&self) -> bool {
+    pub(super) fn looks_like_definition(&self) -> bool {
         let end = self.line_end();
         if end < self.at + 3 {
             return false;
@@ -935,14 +92,14 @@ impl<'a> Parser<'a> {
             && matches!(self.tok_at(end - 3), Tok::Name(_))
     }
 
-    fn looks_like_import(&self) -> bool {
+    pub(super) fn looks_like_import(&self) -> bool {
         let end = self.line_end();
         end >= self.at + 3
             && self.tok_at(end - 1) == &Tok::Symbol('.')
             && matches!(self.tok_at(end - 2), Tok::Verb { name, .. } if name == "가져오다")
     }
 
-    fn ends_with_copula(&self) -> bool {
+    pub(super) fn ends_with_copula(&self) -> bool {
         let end = self.line_end();
         end >= self.at + 2
             && self.tok_at(end - 1) == &Tok::Symbol('.')
@@ -954,7 +111,7 @@ impl<'a> Parser<'a> {
             )
     }
 
-    fn try_target(&mut self) -> Result<Option<Target>> {
+    pub(super) fn try_target(&mut self) -> Result<Option<Target>> {
         let start = self.at;
         let Tok::Name(root) = self.tok_at(start) else {
             if let Tok::Keyword(word) = self.tok_at(start) {
@@ -1020,7 +177,7 @@ impl<'a> Parser<'a> {
         Ok(Some(Target { root, fields, span }))
     }
 
-    fn matching(&self, open: usize) -> Option<usize> {
+    pub(super) fn matching(&self, open: usize) -> Option<usize> {
         let mut depth = 0usize;
         let mut index = open;
         while index < self.tokens.len() {
@@ -1040,7 +197,7 @@ impl<'a> Parser<'a> {
         None
     }
 
-    fn looks_like_table(&self) -> bool {
+    pub(super) fn looks_like_table(&self) -> bool {
         let end = self.line_end();
         end >= self.at + 3
             && self.tok_at(end - 1) == &Tok::Symbol('.')
@@ -1053,7 +210,7 @@ impl<'a> Parser<'a> {
             && matches!(self.tok_at(end - 3), Tok::Keyword(word) if word == "묶음")
     }
 
-    fn grouped(&mut self, span: Span) -> Result<Expr> {
+    pub(super) fn grouped(&mut self, span: Span) -> Result<Expr> {
         if self.closes_table(')') {
             return self.table_body(span);
         }
@@ -1063,12 +220,12 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn closes_table(&self, closer: char) -> bool {
+    pub(super) fn closes_table(&self, closer: char) -> bool {
         self.closes_table_at(|tok| matches!(tok, Tok::Symbol(found) if *found == closer))
     }
 
     // 끝나는 자리 바로 앞이 `묶음` 이면 묶음 리터럴이다.
-    fn closes_table_at(&self, ends: impl Fn(&Tok) -> bool) -> bool {
+    pub(super) fn closes_table_at(&self, ends: impl Fn(&Tok) -> bool) -> bool {
         let mut index = self.at;
         while index < self.tokens.len() {
             let tok = self.tok_at(index);
@@ -1084,7 +241,7 @@ impl<'a> Parser<'a> {
             && matches!(self.tok_at(index - 1), Tok::Keyword(word) if word == "묶음")
     }
 
-    fn table_body(&mut self, span: Span) -> Result<Expr> {
+    pub(super) fn table_body(&mut self, span: Span) -> Result<Expr> {
         let mut entries = Vec::new();
         let mut items: Vec<Expr> = Vec::new();
         while !self.keyword_at(0, "묶음") {
@@ -1119,7 +276,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn table_value(&mut self) -> Result<Expr> {
+    pub(super) fn table_value(&mut self) -> Result<Expr> {
         let span = self.span();
         let made = self.table_body(span)?;
         self.expect(
@@ -1131,7 +288,7 @@ impl<'a> Parser<'a> {
         Ok(made)
     }
 
-    fn table_entry(&mut self) -> Result<(String, Expr)> {
+    pub(super) fn table_entry(&mut self) -> Result<(String, Expr)> {
         let (name, _) = self.expect_name()?;
         if !matches!(
             self.peek(),
@@ -1150,7 +307,7 @@ impl<'a> Parser<'a> {
     }
 
     // `이고`/`인`, 또는 자리값이면 `의 묶음` 이 나올 때까지 값 하나를 읽는다.
-    fn table_tail(&mut self) -> Result<Expr> {
+    pub(super) fn table_tail(&mut self) -> Result<Expr> {
         let mut slots: Vec<Slot> = Vec::new();
         loop {
             let token = self.ahead(0);
@@ -1190,7 +347,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn declare_chain(&mut self, first: Target) -> Result<Vec<(Target, Expr)>> {
+    pub(super) fn declare_chain(&mut self, first: Target) -> Result<Vec<(Target, Expr)>> {
         let mut assigns = Vec::new();
         let mut target = first;
         loop {
@@ -1219,7 +376,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn joins_logic(&self, tok: &Tok) -> Option<Ending> {
+    pub(super) fn joins_logic(&self, tok: &Tok) -> Option<Ending> {
         match tok {
             Tok::Verb {
                 ending: found @ (Ending::Conjunctive | Ending::Alternative),
@@ -1239,7 +396,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn clause(&mut self, slots: Vec<Slot>, info: VerbInfo) -> Expr {
+    pub(super) fn clause(&mut self, slots: Vec<Slot>, info: VerbInfo) -> Expr {
         let (taken, info) = if info.name == "이다" {
             fold_comparison(copula_slots(slots), info)
         } else {
@@ -1255,7 +412,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn value_until_copula(&mut self) -> Result<(Expr, bool)> {
+    pub(super) fn value_until_copula(&mut self) -> Result<(Expr, bool)> {
         let mut slots: Vec<Slot> = Vec::new();
         let mut apart: Vec<Expr> = Vec::new();
         let mut left: Option<Expr> = None;
@@ -1326,7 +483,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn if_statement(&mut self) -> Result<Stmt> {
+    pub(super) fn if_statement(&mut self) -> Result<Stmt> {
         let span = self.span();
         self.expect_keyword("만약")?;
         let mut branches = vec![(self.condition()?, self.block()?)];
@@ -1349,7 +506,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn condition(&mut self) -> Result<Expr> {
+    pub(super) fn condition(&mut self) -> Result<Expr> {
         let mut left: Option<Expr> = None;
         let mut apart: Vec<Expr> = Vec::new();
         let mut any = false;
@@ -1449,14 +606,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn definition_body(&mut self) -> Result<Block> {
+    pub(super) fn definition_body(&mut self) -> Result<Block> {
         self.inside = true;
         let body = self.block();
         self.inside = false;
         body
     }
 
-    fn definition(&mut self) -> Result<Stmt> {
+    pub(super) fn definition(&mut self) -> Result<Stmt> {
         let span = self.span();
         if self.inside {
             return Err(Diag::syntax(msg::NESTED_DEFINITION, span));
@@ -1489,7 +646,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn definition_head(&mut self) -> Result<(String, Vec<(Marker, String)>)> {
+    pub(super) fn definition_head(&mut self) -> Result<(String, Vec<(Marker, String)>)> {
         let mut params: Vec<(Marker, String)> = Vec::new();
         loop {
             let token = self.ahead(0);
@@ -1532,7 +689,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn tail_is_head(&self, offset: usize) -> bool {
+    pub(super) fn tail_is_head(&self, offset: usize) -> bool {
         matches!(self.ahead(offset).tok, Tok::Name(ref name) if name == "것")
             && matches!(
                 self.ahead(offset + 1).tok,
@@ -1541,7 +698,7 @@ impl<'a> Parser<'a> {
             && self.at_symbol(offset + 2, ':')
     }
 
-    fn import_name(&mut self) -> Result<String> {
+    pub(super) fn import_name(&mut self) -> Result<String> {
         match self.peek() {
             Tok::Name(name) => {
                 let name = name.clone();
@@ -1569,7 +726,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn import_statement(&mut self) -> Result<Stmt> {
+    pub(super) fn import_statement(&mut self) -> Result<Stmt> {
         let span = self.span();
         let module = self.import_name()?;
         let particle = self.expect_particle()?;
@@ -1596,7 +753,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn exec_or_loop(&mut self) -> Result<Stmt> {
+    pub(super) fn exec_or_loop(&mut self) -> Result<Stmt> {
         let mut slots: Vec<Slot> = Vec::new();
         let mut calls: Vec<CallExpr> = Vec::new();
         loop {
@@ -1684,7 +841,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn range_loop(&mut self, slots: Vec<Slot>, span: Span) -> Result<Stmt> {
+    pub(super) fn range_loop(&mut self, slots: Vec<Slot>, span: Span) -> Result<Stmt> {
         let (mut start, mut stop, mut step, mut variable) = (None, None, None, None);
         let mut over = None;
         for slot in slots {
@@ -1728,8 +885,4 @@ impl<'a> Parser<'a> {
             span,
         })
     }
-}
-
-fn not_dictionary_form(span: Span) -> Diag {
-    Diag::syntax(msg::HEAD_NOT_DICT, span).with_hint(msg::HEAD_NOT_DICT_HELP)
 }

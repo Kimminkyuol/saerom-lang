@@ -41,7 +41,8 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let mut only_check = false;
     let mut only_hir = false;
     let mut only_types = false;
-    let mut tuning: Option<String> = None;
+    // 최적화는 기본이다. 끄려면 -O0.
+    let mut tuning = "-O2".to_string();
     let mut frames = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -53,7 +54,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
             "--dump-hir" => only_hir = true,
             "--dump-types" => only_types = true,
             "-o" => output = Some(PathBuf::from(rest.next().ok_or(Fault::Usage)?)),
-            "-O" | "-O0" | "-O1" | "-O2" | "-O3" | "-Os" => tuning = Some(arg.clone()),
+            "-O" | "-O0" | "-O1" | "-O2" | "-O3" | "-Os" => tuning.clone_from(arg),
             "-g" => frames = true,
             "-h" | "--help" => return Err(Fault::Usage),
             other if other.starts_with('-') => return Err(Fault::Usage),
@@ -105,7 +106,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     }
 
     let output = output.unwrap_or_else(|| Path::new(path).with_extension(""));
-    link(&ir, &output, tuning.as_deref()).map_err(Fault::Message)
+    link(&ir, &output, &tuning).map_err(Fault::Message)
 }
 
 fn render(found: &[saeromc::diag::Diag], source: &str, path: &str) -> String {
@@ -135,7 +136,7 @@ const TRIM: &[&str] = &["-Wl,-dead_strip", "-Wl,-x", "-Wl,-S"];
 #[cfg(not(target_os = "macos"))]
 const TRIM: &[&str] = &["-Wl,--gc-sections", "-Wl,-s"];
 
-fn link(ir: &str, output: &Path, tuning: Option<&str>) -> Result<(), String> {
+fn link(ir: &str, output: &Path, tuning: &str) -> Result<(), String> {
     let ir_path = output.with_extension("ll");
     std::fs::write(&ir_path, ir).map_err(|error| {
         complain(&msg::write_failed(
@@ -145,10 +146,8 @@ fn link(ir: &str, output: &Path, tuning: Option<&str>) -> Result<(), String> {
     })?;
     let runtime = runtime_archive()?;
     let mut clang = Command::new("clang");
-    if let Some(tuning) = tuning {
-        clang.arg(tuning);
-    }
     let done = clang
+        .arg(tuning)
         .args(TRIM)
         .arg(&ir_path)
         .arg(&runtime)

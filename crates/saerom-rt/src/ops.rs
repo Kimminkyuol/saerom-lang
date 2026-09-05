@@ -1,8 +1,9 @@
 use crate::msg;
-use crate::report::{self, Report};
+
 use crate::text::{show, to_text, write_text};
 use crate::value::*;
-use std::io::Write;
+use crate::{fault::fail, io::flush_out};
+
 
 pub type Nouns = Option<
     unsafe extern "C" fn(
@@ -12,174 +13,6 @@ pub type Nouns = Option<
         len: usize,
     ) -> i8,
 >;
-
-unsafe fn at<'a>(found: *const Value) -> &'a Value {
-    &*found
-}
-
-unsafe fn name_of<'a>(bytes: *const u8, len: usize) -> &'a str {
-    std::str::from_utf8_unchecked(std::slice::from_raw_parts(bytes, len))
-}
-
-#[repr(C)]
-pub struct Source {
-    name: *const u8,
-    name_len: usize,
-    text: *const u8,
-    text_len: usize,
-}
-
-#[no_mangle]
-pub static mut SR_POS: u64 = 0;
-
-static mut SOURCES: (*const Source, usize) = (std::ptr::null(), 0);
-static mut TRACED: bool = false;
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_sources(table: *const Source, count: usize, traced: i8) {
-    SOURCES = (table, count);
-    TRACED = traced != 0;
-}
-
-unsafe fn source_at(index: usize) -> Option<(&'static str, &'static str)> {
-    let (table, count) = SOURCES;
-    if table.is_null() || index >= count {
-        return None;
-    }
-    let found = &*table.add(index);
-    Some((
-        name_of(found.name, found.name_len),
-        name_of(found.text, found.text_len),
-    ))
-}
-
-#[repr(C)]
-pub struct Site {
-    name: *const u8,
-    name_len: usize,
-}
-
-pub const FRAMES: usize = 1024;
-
-#[no_mangle]
-pub static mut SR_FRAMES: [*const Site; FRAMES] = [std::ptr::null(); FRAMES];
-
-#[no_mangle]
-pub static mut SR_AT: [u64; FRAMES] = [0; FRAMES];
-
-#[no_mangle]
-pub static mut SR_DEPTH: u32 = 0;
-
-// 스택 가드. 되돌이가 깊어지면 세그폴트 대신 한국어 오류로 끝낸다.
-// 바닥은 main 들머리의 주소에서 예산만큼 뺀 값이다.
-static mut STACK_FLOOR: usize = 0;
-const STACK_BUDGET: usize = 6 << 20;
-
-fn here() -> usize {
-    let probe = 0u8;
-    std::hint::black_box(&probe) as *const u8 as usize
-}
-
-#[no_mangle]
-pub extern "C" fn sr_stack_base() {
-    unsafe { STACK_FLOOR = here().saturating_sub(STACK_BUDGET) };
-}
-
-#[no_mangle]
-pub extern "C" fn sr_stack_check() {
-    if here() < unsafe { std::ptr::read(&raw const STACK_FLOOR) } {
-        fail(msg::VALUE, msg::STACK_DEEP.to_string());
-    }
-}
-
-struct Spot {
-    path: &'static str,
-    text: &'static str,
-    line: usize,
-    col: usize,
-    end: usize,
-}
-
-fn spot(packed: u64) -> Option<Spot> {
-    let module = (packed >> 48) as usize;
-    let line = ((packed >> 24) & 0xFF_FFFF) as usize;
-    let col = ((packed >> 12) & 0xFFF) as usize;
-    let width = (packed & 0xFFF) as usize;
-    if line == 0 {
-        return None;
-    }
-    let (path, text) = unsafe { source_at(module) }?;
-    Some(Spot {
-        path,
-        text,
-        line,
-        col,
-        end: col + width,
-    })
-}
-
-fn where_at(packed: u64) -> Option<String> {
-    let spot = spot(packed)?;
-    Some(format!("{}:{}:{}", spot.path, spot.line, spot.col + 1))
-}
-
-fn frame_name(level: usize) -> String {
-    let site =
-        unsafe { std::ptr::read((&raw const SR_FRAMES).cast::<*const Site>().add(level)) };
-    if site.is_null() {
-        return msg::FRAME_UNKNOWN.to_string();
-    }
-    let site = unsafe { &*site };
-    unsafe { name_of(site.name, site.name_len) }.to_string()
-}
-
-fn frame(level: usize, name: &str, here: u64) -> String {
-    let mut out = format!("{}: {name}\n", report::blue(&format!("{level:>4}")));
-    if let Some(at) = where_at(here) {
-        out.push_str(&format!("             at {at}\n"));
-    }
-    out
-}
-
-fn trace() -> String {
-    if !unsafe { std::ptr::read(&raw const TRACED) } {
-        return report::note(msg::TRACE_OFF);
-    }
-    let depth = unsafe { std::ptr::read(&raw const SR_DEPTH) } as usize;
-    let shown = depth.min(FRAMES);
-    let mut out = format!("{}\n", report::bold(msg::TRACE));
-    let mut here = unsafe { std::ptr::read(&raw const SR_POS) };
-    for level in (0..shown).rev() {
-        out.push_str(&frame(shown - 1 - level, &frame_name(level), here));
-        here = unsafe { std::ptr::read((&raw const SR_AT).cast::<u64>().add(level)) };
-    }
-    out.push_str(&frame(shown, msg::FRAME_TOP, here));
-    out
-}
-
-fn fail(kind: &str, message: String) -> ! {
-    flush_out();
-    let here = unsafe { std::ptr::read(&raw const SR_POS) };
-    match spot(here) {
-        Some(spot) => eprint!(
-            "{}",
-            Report {
-                kind,
-                msg: &message,
-                hint: None,
-                path: spot.path,
-                source: Some(spot.text),
-                line: spot.line,
-                col: spot.col,
-                end: spot.end,
-            }
-            .render()
-        ),
-        None => eprint!("{}", report::plain(kind, &message)),
-    }
-    eprint!("\n{}", trace());
-    std::process::exit(1);
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_stop(message: *const Value) {
@@ -197,26 +30,6 @@ fn numbers(verb: &str, values: [&Value; 2]) {
 
 fn both_int(left: &Value, right: &Value) -> bool {
     left.tag == INT && right.tag == INT
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_nothing(out: *mut Value) {
-    *out = Value::nothing();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_int(out: *mut Value, found: i64) {
-    *out = Value::int(found);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_float(out: *mut Value, found: f64) {
-    *out = Value::float(found);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_bool(out: *mut Value, found: i8) {
-    *out = Value::bool(found != 0);
 }
 
 #[no_mangle]
@@ -238,11 +51,6 @@ pub unsafe extern "C" fn sr_str_kept(
         *held = Value::text(name_of(bytes, len).to_string());
     }
     *out = *held;
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_copy(dst: *mut Value, src: *const Value) {
-    *dst = *src;
 }
 
 #[no_mangle]
@@ -309,43 +117,6 @@ pub unsafe extern "C" fn sr_remove_key(table: *const Value, key: *const Value) {
     }
 }
 
-// 뿌리: 전역 자리 목록과 함수마다의 자리 목록.
-static mut FIXED: (*const *mut Value, usize) = (std::ptr::null(), 0);
-static mut STACK: Vec<(*const *mut Value, usize)> = Vec::new();
-
-fn frames() -> &'static mut Vec<(*const *mut Value, usize)> {
-    unsafe { &mut *std::ptr::addr_of_mut!(STACK) }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_roots(spots: *const *mut Value, count: usize) {
-    FIXED = (spots, count);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_frame_push(spots: *const *mut Value, count: usize) {
-    frames().push((spots, count));
-}
-
-#[no_mangle]
-pub extern "C" fn sr_frame_pop() {
-    frames().pop();
-}
-
-// 안전 지점. 여기서는 힙을 가리키는 값이 모두 자리 안에 있다.
-#[no_mangle]
-pub extern "C" fn sr_gc_point() {
-    if !crate::value::crowded() {
-        return;
-    }
-    let fixed = unsafe { std::ptr::read(std::ptr::addr_of!(FIXED)) };
-    let spread = |(spots, count): (*const *mut Value, usize)| {
-        (0..count).map(move |at| unsafe { *spots.add(at) })
-    };
-    let roots = spread(fixed).chain(frames().iter().copied().flat_map(spread));
-    crate::value::collect(roots);
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn sr_template(out: *mut Value, parts: *const Value, count: usize) {
     let mut text = String::new();
@@ -353,42 +124,6 @@ pub unsafe extern "C" fn sr_template(out: *mut Value, parts: *const Value, count
         write_text(&mut text, at(parts.add(index)));
     }
     *out = Value::text(text);
-}
-
-static mut OUT: Vec<u8> = Vec::new();
-
-const OUT_LIMIT: usize = 1 << 16;
-
-fn out_buffer() -> &'static mut Vec<u8> {
-    unsafe { &mut *std::ptr::addr_of_mut!(OUT) }
-}
-
-fn flush_out() {
-    let buffer = out_buffer();
-    if buffer.is_empty() {
-        return;
-    }
-    let stdout = std::io::stdout();
-    let mut held = stdout.lock();
-    let _ = held.write_all(buffer);
-    let _ = held.flush();
-    buffer.clear();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_print(found: *const Value) {
-    let found = at(found);
-    let buffer = out_buffer();
-    if found.tag == STR {
-        buffer.extend_from_slice(found.as_text().as_bytes());
-    } else {
-        let mut text = String::new();
-        write_text(&mut text, found);
-        buffer.extend_from_slice(text.as_bytes());
-    }
-    if buffer.len() >= OUT_LIMIT {
-        flush_out();
-    }
 }
 
 fn deep_copy(found: &Value) -> Value {
@@ -925,77 +660,3 @@ pub unsafe extern "C" fn sr_clone(out: *mut Value, found: *const Value) {
     *out = deep_copy(at(found));
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *const Value) {
-    use std::os::unix::ffi::OsStrExt;
-    let name = to_text(at(path));
-    let mode = to_text(at(how));
-    let mut open = std::fs::OpenOptions::new();
-    match mode.as_str() {
-        "읽기" => open.read(true),
-        "쓰기" => open.write(true).create(true).truncate(true),
-        "추가" => open.append(true).create(true),
-        _ => fail(msg::VALUE, msg::bad_mode(&mode)),
-    };
-    let found = open.open(std::ffi::OsStr::from_bytes(name.as_bytes()));
-    *out = match found {
-        Ok(file) => {
-            use std::os::unix::io::IntoRawFd;
-            Value::int(file.into_raw_fd() as i64)
-        }
-        Err(_) => Value::nothing(),
-    };
-}
-
-fn descriptor(verb: &str, found: &Value) -> i32 {
-    if found.tag != INT {
-        fail(msg::VALUE, msg::not_descriptor(verb, &show(found)));
-    }
-    found.as_int() as i32
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *const Value) {
-    use std::io::Read;
-    use std::os::unix::io::FromRawFd;
-    let fd = descriptor("읽다", at(file));
-    let want = descriptor("읽다", at(count)).max(0) as usize;
-    flush_out();
-    let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
-    let mut buffer = vec![0u8; want];
-    // 실패도 파일 끝도 없음이다. 빈 글과 섞이면 가릴 수 없다.
-    let Ok(read) = held.read(&mut buffer) else {
-        *out = Value::nothing();
-        return;
-    };
-    if read == 0 && want > 0 {
-        *out = Value::nothing();
-        return;
-    }
-    buffer.truncate(read);
-    *out = Value::text(String::from_utf8_lossy(&buffer).into_owned());
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_write(out: *mut Value, file: *const Value, text: *const Value) {
-    use std::os::unix::io::FromRawFd;
-    let fd = descriptor("쓰다", at(file));
-    if fd == 1 || fd == 2 {
-        flush_out();
-    }
-    let body = to_text(at(text));
-    let mut held = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(fd));
-    let written = held.write(body.as_bytes());
-    let _ = held.flush();
-    *out = match written {
-        Ok(count) => Value::int(count as i64),
-        Err(_) => Value::nothing(),
-    };
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn sr_close(file: *const Value) {
-    use std::os::unix::io::FromRawFd;
-    let fd = descriptor("닫다", at(file));
-    drop(std::fs::File::from_raw_fd(fd));
-}

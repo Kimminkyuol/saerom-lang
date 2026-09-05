@@ -1,5 +1,5 @@
 use crate::ast::Stmt;
-use crate::diag::{Diag, Result, Span};
+use crate::diag::{Diag, Result};
 use crate::msg;
 use crate::{parse, prescan};
 use std::collections::HashMap;
@@ -137,6 +137,3 @@ impl Walk {
     }
 }
 
-pub fn span_of(statements: &[Stmt]) -> Span {
-    statements.first().map(Stmt::span).unwrap_or_default()
-}

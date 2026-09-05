@@ -28,6 +28,11 @@ impl Marker {
 
 pub type Signature = Vec<Marker>;
 
+// 조사 다발이 같은가.
+pub fn same(left: &[Marker], right: &[Marker]) -> bool {
+    left.len() == right.len() && ordered(left.iter().copied()) == ordered(right.iter().copied())
+}
+
 pub fn ordered(markers: impl IntoIterator<Item = Marker>) -> Signature {
     let mut found: Signature = markers.into_iter().collect();
     found.sort_unstable();
@@ -91,13 +96,6 @@ impl Signatures {
         self.0.contains_key(verb)
     }
 
-    pub fn absorb(&mut self, other: &Signatures) {
-        for (verb, ways) in &other.0 {
-            for signature in ways {
-                self.add(verb, signature.clone());
-            }
-        }
-    }
 }
 
 const BUILTIN: &[(&str, &[Marker])] = &[

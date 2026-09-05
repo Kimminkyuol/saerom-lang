@@ -6,9 +6,6 @@ use crate::sig::{ordered, Marker, Signatures};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub fn prescan(source: &str, base_dir: Option<&Path>) -> Result<Vocabulary> {
-    scan(source, base_dir, &mut HashSet::new())
-}
 
 fn scan(
     source: &str,

@@ -156,14 +156,14 @@ fn spot_of(name: &str) -> Option<&str> {
     name.strip_suffix("번째").filter(|head| !head.is_empty())
 }
 
-fn same_slots(left: &[Marker], right: &[Marker]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let (mut a, mut b) = (left.to_vec(), right.to_vec());
-    a.sort_unstable();
-    b.sort_unstable();
-    a == b
+
+// 이름과 조사 다발로 동사를 찾는다. 뒤에 정의한 것이 이긴다.
+fn pick_verb(verbs: &[Verb], name: &str, used: &[Marker]) -> Option<(FuncId, Vec<Marker>)> {
+    verbs
+        .iter()
+        .rev()
+        .find(|found| found.name == name && crate::sig::same(&found.params, used))
+        .map(|found| (found.func, found.params.clone()))
 }
 
 fn order_args(mut args: Vec<(Marker, Expr)>, params: &[Marker]) -> Vec<Expr> {
@@ -354,7 +354,7 @@ impl<'a> Resolver<'a> {
                     if self.tables[unit]
                         .verbs
                         .iter()
-                        .any(|found| found.name == *name && same_slots(&found.params, &params))
+                        .any(|found| found.name == *name && crate::sig::same(&found.params, &params))
                     {
                         self.note(unit, Diag::name(msg::already_defined(name), *span));
                     }
@@ -604,12 +604,8 @@ impl<'a> Resolver<'a> {
                 for call in calls {
                     let used: Vec<Marker> =
                         call.slots.iter().map(|slot| slot.marker).collect();
-                    let Some(target) = self.tables[unit]
-                        .verbs
-                        .iter()
-                        .rev()
-                        .find(|found| found.name == call.verb && same_slots(&found.params, &used))
-                        .map(|found| found.func)
+                    let Some((target, _)) =
+                        pick_verb(&self.tables[unit].verbs, &call.verb, &used)
                     else {
                         continue;
                     };
@@ -1167,13 +1163,8 @@ impl<'a> Resolver<'a> {
                 .map(|(_, other)| *other)
                 .collect();
             let used: Vec<Marker> = rest.iter().map(|slot| slot.marker).collect();
-            let found = self.tables[home]
-                .verbs
-                .iter()
-                .rev()
-                .find(|verb| verb.name == predicate && same_slots(&verb.params, &used))
-                .map(|verb| (verb.func, verb.params.clone()));
-            let Some((func, params)) = found else {
+            let Some((func, params)) = pick_verb(&self.tables[home].verbs, &predicate, &used)
+            else {
                 continue;
             };
             let mut args = Vec::with_capacity(rest.len());
@@ -1201,13 +1192,7 @@ impl<'a> Resolver<'a> {
         span: Span,
     ) -> std::result::Result<Vec<(Marker, String, String)>, ()> {
         let used: Vec<Marker> = slots.iter().map(|slot| slot.marker).collect();
-        let Some(func) = self.tables[home]
-            .verbs
-            .iter()
-            .rev()
-            .find(|found| found.name == verb && same_slots(&found.params, &used))
-            .map(|found| found.func)
-        else {
+        let Some((func, _)) = pick_verb(&self.tables[home].verbs, verb, &used) else {
             return Ok(Vec::new());
         };
         let Some(generic) = self.generics.get(&func) else {
@@ -1314,13 +1299,7 @@ impl<'a> Resolver<'a> {
         // 동사 자리 매개변수면 넘어온 이름으로 바꿔 부른다.
         let swapped = frame.verbs.get(verb).cloned();
         let verb = swapped.as_deref().unwrap_or(verb);
-        let found = self.tables[home]
-            .verbs
-            .iter()
-            .rev()
-            .find(|found| found.name == verb && same_slots(&found.params, &used))
-            .map(|found| (found.func, found.params.clone()));
-        if let Some((func, params)) = found {
+        if let Some((func, params)) = pick_verb(&self.tables[home].verbs, verb, &used) {
             let (func, params) = if given.is_empty() {
                 (func, params)
             } else {

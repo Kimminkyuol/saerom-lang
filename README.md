@@ -13,7 +13,7 @@
 ## 실행
 
 ```
-saeromc <파일.sr> [-o <출력>] [-O2] [-g]
+saeromc <파일.sr> [-o <출력>] [-O0] [-g]
 saeromc --check <파일.sr>
 saeromc --dump-types <파일.sr>
 saeromc --emit-llvm <파일.sr>

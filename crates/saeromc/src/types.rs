@@ -246,23 +246,6 @@ fn count_sets(body: &[Stmt], counts: &mut [usize], found: &mut [Option<Rc<str>>]
     }
 }
 
-fn blocks(statement: &Stmt) -> Vec<&[Stmt]> {
-    match statement {
-        Stmt::If {
-            branches,
-            otherwise,
-        } => {
-            let mut found: Vec<&[Stmt]> =
-                branches.iter().map(|(_, body)| body.as_slice()).collect();
-            found.extend(otherwise.iter().map(Vec::as_slice));
-            found
-        }
-        Stmt::Range { body, .. } | Stmt::While { body, .. } | Stmt::Each { body, .. } => {
-            vec![body]
-        }
-        _ => Vec::new(),
-    }
-}
 
 fn raise(slot: &mut Ty, found: Ty, moved: &mut bool) {
     let joined = slot.join(found);

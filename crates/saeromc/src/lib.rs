@@ -1,21 +1,21 @@
 mod assign;
 mod ast;
-pub mod builtins;
+mod builtins;
 pub mod diag;
 pub mod dump;
-pub mod emit;
+mod emit;
 pub mod hangul;
-pub mod hir;
-pub mod intern;
-pub mod lex;
-pub mod load;
-pub mod parse;
-pub mod prescan;
-pub mod resolve;
-pub mod reuse;
-pub mod sig;
-pub mod types;
-pub mod words;
+mod hir;
+mod intern;
+mod lex;
+mod load;
+mod parse;
+mod prescan;
+mod resolve;
+mod reuse;
+mod sig;
+mod types;
+mod words;
 
 pub use saerom_msg::{msg, report};
 

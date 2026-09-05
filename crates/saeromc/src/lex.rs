@@ -297,8 +297,8 @@ impl Lexer<'_> {
                     ));
                 }
             }
-            for (form, role, canon) in words::particles_by_length() {
-                if let Some(head) = body_before(chunk, form.as_ref()) {
+            for &(form, role, canon) in words::particles_by_length() {
+                if let Some(head) = body_before(chunk, form) {
                     let cut = end - form.chars().count();
                     let rest = Splitting {
                         take_particle: false,
