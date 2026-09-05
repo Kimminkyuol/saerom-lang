@@ -794,8 +794,7 @@ impl<'a> Parser<'a> {
             let token = self.ahead(0);
             if stop(&token.tok) || matches!(token.tok, Tok::Eof) {
                 if slots.len() != 1 {
-                    let mark = crate::hangul::subject_particle(what);
-                    return Err(Diag::syntax(msg::not_one(what, mark), token.span));
+                    return Err(Diag::syntax(msg::not_one(what), token.span));
                 }
                 return Ok(slots.pop().expect("값 하나").expr);
             }
@@ -833,6 +832,11 @@ impl<'a> Parser<'a> {
             stuck: false,
         };
         inner.replanned(|found| {
+            // 괄호 없이도 `3의 묶음` 을 받는다.
+            if found.closes_table_at(|tok| matches!(tok, Tok::Newline | Tok::Eof)) {
+                let span = found.span();
+                return found.table_body(span);
+            }
             found.reduce_until(
                 |tok| matches!(tok, Tok::Newline | Tok::Eof),
                 msg::WANT_EMBEDDED,
@@ -1060,13 +1064,21 @@ impl<'a> Parser<'a> {
     }
 
     fn closes_table(&self, closer: char) -> bool {
+        self.closes_table_at(|tok| matches!(tok, Tok::Symbol(found) if *found == closer))
+    }
+
+    // 끝나는 자리 바로 앞이 `묶음` 이면 묶음 리터럴이다.
+    fn closes_table_at(&self, ends: impl Fn(&Tok) -> bool) -> bool {
         let mut index = self.at;
         while index < self.tokens.len() {
-            match self.tok_at(index) {
-                Tok::Symbol(found) if *found == closer => break,
-                Tok::Newline | Tok::Eof => return false,
-                _ => index += 1,
+            let tok = self.tok_at(index);
+            if ends(tok) {
+                break;
             }
+            if matches!(tok, Tok::Newline | Tok::Eof) {
+                return false;
+            }
+            index += 1;
         }
         index > self.at
             && matches!(self.tok_at(index - 1), Tok::Keyword(word) if word == "묶음")

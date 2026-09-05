@@ -117,6 +117,8 @@ fn find_in(folder: &Path, wanted: &str) -> Option<PathBuf> {
 
 #[derive(Default, Clone)]
 pub struct Program {
+    // 두 번째 훑기의 결과. 버리면 부르는 쪽이 똑같이 한 번 더 훑는다.
+    pub tokens: Vec<Token>,
     pub vocab: Vocabulary,
     pub signatures: Signatures,
     pub modules: HashSet<String>,
@@ -160,6 +162,7 @@ fn gather(
     if root {
         shadowed(&vocab, &tokens)?;
         into.vocab = vocab;
+        into.tokens.clone_from(&tokens);
     }
 
     for import in imports(&tokens) {

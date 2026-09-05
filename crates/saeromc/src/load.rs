@@ -1,7 +1,7 @@
 use crate::ast::Stmt;
 use crate::diag::{Diag, Result, Span};
 use crate::msg;
-use crate::{lex, parse, prescan};
+use crate::{parse, prescan};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -84,8 +84,7 @@ impl Walk {
         base_dir: Option<&Path>,
     ) -> Result<UnitId> {
         let program = prescan::survey(&source, base_dir)?;
-        let tokens = lex::tokenize(&source, &program.vocab)?;
-        let parsed = parse::parse(&tokens, &program, base_dir);
+        let parsed = parse::parse(&program.tokens, &program, base_dir);
 
         let id = self.units.len();
         self.units.push(Unit {

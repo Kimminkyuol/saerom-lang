@@ -13,8 +13,6 @@ pub enum Ty {
     Float,
     Str,
     Table,
-    // 없음이 섞인 값. 검사하기 전에는 쓸 수 없다.
-    Maybe,
     Any,
 }
 
@@ -24,14 +22,8 @@ impl Ty {
             (a, b) if a == b => a,
             (Ty::Never, b) => b,
             (a, Ty::Never) => a,
-            // 한쪽이 없음이면 "없음일 수 있음"이 된다. Any 로 뭉개면 검사할 수 없다.
-            (Ty::Nothing | Ty::Maybe, _) | (_, Ty::Nothing | Ty::Maybe) => Ty::Maybe,
             _ => Ty::Any,
         }
-    }
-
-    pub fn maybe_nothing(self) -> bool {
-        matches!(self, Ty::Nothing | Ty::Maybe)
     }
 
     pub fn number(self) -> bool {
@@ -115,9 +107,8 @@ impl Types {
         match op {
             Builtin::Print | Builtin::Stop | Builtin::Nothing => Ty::Nothing,
             Builtin::Greater | Builtin::Less | Builtin::Equal | Builtin::Truthy => Ty::Bool,
-            // 실패도 파일 끝도 없음이다.
-            Builtin::Read => Ty::Maybe,
-            Builtin::Open | Builtin::Write => Ty::Maybe,
+            // 실패도 파일 끝도 없음이라 갈래가 섞인다.
+            Builtin::Read | Builtin::Open | Builtin::Write => Ty::Any,
             Builtin::Close => Ty::Nothing,
             Builtin::Clone => arg(0),
             Builtin::Convert => self.converted(function, args),

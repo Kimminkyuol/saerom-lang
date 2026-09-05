@@ -12,18 +12,12 @@ enum Key {
 #[derive(Default)]
 pub struct Reuse {
     kept: HashSet<Key>,
-    owned: HashSet<Key>,
 }
 
 impl Reuse {
     // 제자리 잇기를 해도 되는 자리 (문자열 누적)
     pub fn allows(&self, function: Option<FuncId>, place: Place) -> bool {
         key_of(function, place).is_some_and(|key| self.kept.contains(&key))
-    }
-
-    // 값을 혼자 쥐고 있는 자리. 덮어쓸 때 옛 값을 놓아줘도 된다.
-    pub fn owns(&self, function: Option<FuncId>, place: Place) -> bool {
-        key_of(function, place).is_some_and(|key| self.owned.contains(&key))
     }
 }
 
@@ -75,15 +69,7 @@ pub fn find(program: &Program, types: &Types) -> Reuse {
         .filter(|&(&key, &holds)| alone(key, holds) && ty_of(types, key) == Ty::Str)
         .map(|(&key, _)| key)
         .collect();
-    let owned = scan
-        .seen
-        .iter()
-        .filter(|&(&key, &holds)| {
-            alone(key, holds) && matches!(ty_of(types, key), Ty::Str | Ty::Table)
-        })
-        .map(|(&key, _)| key)
-        .collect();
-    Reuse { kept, owned }
+    Reuse { kept }
 }
 
 fn ty_of(types: &Types, key: Key) -> Ty {

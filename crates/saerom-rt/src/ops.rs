@@ -2,7 +2,6 @@ use crate::msg;
 use crate::report::{self, Report};
 use crate::text::{show, to_text, write_text};
 use crate::value::*;
-use std::cell::UnsafeCell;
 use std::io::Write;
 
 pub type Nouns = Option<
@@ -310,17 +309,41 @@ pub unsafe extern "C" fn sr_remove_key(table: *const Value, key: *const Value) {
     }
 }
 
-// 부린 뒤 바로 버려도 되는 임시값만 여기로 온다 (emit 이 판단).
+// 뿌리: 전역 자리 목록과 함수마다의 자리 목록.
+static mut FIXED: (*const *mut Value, usize) = (std::ptr::null(), 0);
+static mut STACK: Vec<(*const *mut Value, usize)> = Vec::new();
+
+fn frames() -> &'static mut Vec<(*const *mut Value, usize)> {
+    unsafe { &mut *std::ptr::addr_of_mut!(STACK) }
+}
+
 #[no_mangle]
-pub unsafe extern "C" fn sr_drop(value: *mut Value) {
-    let held = &mut *value;
-    match held.tag {
-        STR => drop(Box::from_raw(held.bits as *mut String)),
-        // 겉 상자만 놓아준다. 안의 값은 따로 쥐고 있을 수 있다.
-        TABLE => drop(Box::from_raw(held.bits as *mut UnsafeCell<Table>)),
-        _ => {}
+pub unsafe extern "C" fn sr_roots(spots: *const *mut Value, count: usize) {
+    FIXED = (spots, count);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_frame_push(spots: *const *mut Value, count: usize) {
+    frames().push((spots, count));
+}
+
+#[no_mangle]
+pub extern "C" fn sr_frame_pop() {
+    frames().pop();
+}
+
+// 안전 지점. 여기서는 힙을 가리키는 값이 모두 자리 안에 있다.
+#[no_mangle]
+pub extern "C" fn sr_gc_point() {
+    if !crate::value::crowded() {
+        return;
     }
-    *held = Value::nothing();
+    let fixed = unsafe { std::ptr::read(std::ptr::addr_of!(FIXED)) };
+    let spread = |(spots, count): (*const *mut Value, usize)| {
+        (0..count).map(move |at| unsafe { *spots.add(at) })
+    };
+    let roots = spread(fixed).chain(frames().iter().copied().flat_map(spread));
+    crate::value::collect(roots);
 }
 
 #[no_mangle]
@@ -404,15 +427,11 @@ pub unsafe extern "C" fn sr_field_get(
 ) {
     let owner = at(owner);
     let field = name_of(bytes, len);
+    // 내장 필드 > 파생 필드 > 열쇠. 컴파일 때 아는 것이 먼저다.
+    // 가려진 열쇠는 `X의 (식)` 으로 꺼낸다.
     if field == "자료형" {
         *out = Value::text(owner.type_name().to_string());
         return;
-    }
-    if owner.tag == TABLE {
-        if let Some(value) = owner.as_table().get(field) {
-            *out = value;
-            return;
-        }
     }
     if field == "명칭" && owner.tag == TABLE {
         let names = owner
@@ -440,10 +459,26 @@ pub unsafe extern "C" fn sr_field_get(
             return;
         }
     }
+    if sr_key_get(out, owner, bytes, len) {
+        return;
+    }
     if owner.tag == TABLE {
         fail(msg::NAME, msg::no_field(field));
     }
     fail(msg::NAME, msg::no_field_on(owner.kind(), field));
+}
+
+unsafe fn sr_key_get(out: *mut Value, owner: &Value, bytes: *const u8, len: usize) -> bool {
+    if owner.tag != TABLE {
+        return false;
+    }
+    match owner.as_table().get(name_of(bytes, len)) {
+        Some(value) => {
+            *out = value;
+            true
+        }
+        None => false,
+    }
 }
 
 fn key_text(key: &Value) -> &'static str {
@@ -460,8 +495,13 @@ pub unsafe extern "C" fn sr_pick_get(
     key: *const Value,
     nouns: Nouns,
 ) {
+    // 괄호는 열쇠 전용이다. 필드는 앞말에 붙어 읽히고 열쇠는 따로 선다.
+    let _ = nouns;
+    let owner = at(owner);
     let name = key_text(at(key));
-    sr_field_get(out, owner, name.as_ptr(), name.len(), nouns);
+    if !sr_key_get(out, owner, name.as_ptr(), name.len()) {
+        fail(msg::NAME, msg::no_field(name));
+    }
 }
 
 #[no_mangle]
@@ -470,7 +510,8 @@ pub unsafe extern "C" fn sr_pick_set(
     key: *const Value,
     value: *const Value,
 ) {
-    let name = key_text(at(key));
+    // 빌린 글자를 명칭으로 쥐면 그 글자가 수집될 때 무너진다. 따로 남긴다.
+    let name: &'static str = key_text(at(key)).to_string().leak();
     sr_field_set(owner, name.as_ptr(), name.len(), value);
 }
 

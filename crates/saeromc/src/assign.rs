@@ -68,6 +68,10 @@ impl Check<'_> {
                 for call in calls {
                     self.call(call, live);
                 }
+                // 종료한다는 되돌아오지 않는다
+                if calls.iter().any(|call| call.verb == "종료하다") {
+                    return false;
+                }
             }
             Stmt::Value { expr, .. } => self.expr(expr, live),
             Stmt::Return { value, .. } => {

@@ -1,5 +1,4 @@
 mod assign;
-mod nothing;
 mod ast;
 pub mod builtins;
 pub mod diag;
@@ -50,15 +49,13 @@ impl Failure {
 }
 
 pub fn tokens(source: &str, base_dir: Option<&Path>) -> diag::Result<Vec<lex::Token>> {
-    let program = prescan::survey(source, base_dir)?;
-    lex::tokenize(source, &program.vocab)
+    Ok(prescan::survey(source, base_dir)?.tokens)
 }
 
 pub fn front(source: &str, base_dir: Option<&Path>) -> Result<Vec<ast::Stmt>, Vec<Diag>> {
     let single = |error| vec![error];
     let program = prescan::survey(source, base_dir).map_err(single)?;
-    let tokens = lex::tokenize(source, &program.vocab).map_err(single)?;
-    let parsed = parse::parse(&tokens, &program, base_dir);
+    let parsed = parse::parse(&program.tokens, &program, base_dir);
     if parsed.errors.is_empty() {
         Ok(parsed.statements)
     } else {
@@ -81,30 +78,12 @@ pub fn analyze(
             errors,
         });
     }
-    let program = match resolve::resolve(&loaded) {
-        Ok(program) => program,
-        Err(errors) => {
-            return Err(Failure {
-                loaded: Some(loaded),
-                errors,
-            })
-        }
-    };
-    let found = types::infer(&program);
-    let errors: Vec<Diag> = nothing::check(&program, &found)
-        .into_iter()
-        .map(|(module, mut error)| {
-            error.unit = Some(program.modules[module as usize].unit);
-            error
-        })
-        .collect();
-    if errors.is_empty() {
-        Ok((loaded, program))
-    } else {
-        Err(Failure {
+    match resolve::resolve(&loaded) {
+        Ok(program) => Ok((loaded, program)),
+        Err(errors) => Err(Failure {
             loaded: Some(loaded),
             errors,
-        })
+        }),
     }
 }
 

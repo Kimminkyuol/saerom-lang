@@ -222,7 +222,10 @@ declare void @sr_close(ptr)
 declare void @sr_stop(ptr)
 declare void @sr_clone(ptr, ptr)
 declare void @sr_finish()
-declare void @sr_drop(ptr)
+declare void @sr_roots(ptr, i64)
+declare void @sr_frame_push(ptr, i64)
+declare void @sr_frame_pop()
+declare void @sr_gc_point()
 declare void @sr_bad_step()
 declare void @sr_stack_base()
 declare void @sr_stack_check()
@@ -1030,15 +1033,6 @@ impl<'a> Emitter<'a> {
             found.symbol,
             passed.join(", ")
         ));
-        // 보간 문자열은 늘 새로 만들어진다. 값을 쥐지 않는 내장에 바로 넘긴
-        // 것이면 아무도 가리키지 않으므로 그 자리에서 놓아준다.
-        if op != Builtin::Push {
-            for (index, arg) in args.iter().enumerate().take(found.arity) {
-                if matches!(arg, Expr::Template(_)) {
-                    self.line(&format!("call void @sr_drop(ptr {})", given[index]));
-                }
-            }
-        }
         Val {
             repr: Repr::Boxed,
             name: out,
@@ -1093,7 +1087,7 @@ impl<'a> Emitter<'a> {
         let kind = self.program.functions[func as usize].kind;
         let ty = self.types.returns[func as usize];
         let needed = match kind {
-            Kind::Noun => matches!(ty, Ty::Any | Ty::Nothing | Ty::Maybe | Ty::Never),
+            Kind::Noun => matches!(ty, Ty::Any | Ty::Nothing | Ty::Never),
             Kind::Verb => false,
         };
         if !needed {
@@ -1134,18 +1128,11 @@ impl<'a> Emitter<'a> {
                 if self.append_in_place(*place, value) {
                     return;
                 }
-                let owns = self.reuse.owns(self.current, *place);
-                // 슬롯에 바로 들어가는 리터럴만 캐시를 피한다. 중첩된 리터럴은
-                // 어떤 연산이 삼키고 새 값을 내므로 캐시해도 된다.
-                self.mutable_str = (owns || self.reuse.allows(self.current, *place))
-                    && matches!(value, Expr::Str(_));
+                // 제자리 잇기가 닿는 자리에 들어가는 리터럴만 캐시를 피한다.
+                self.mutable_str =
+                    self.reuse.allows(self.current, *place) && matches!(value, Expr::Str(_));
                 let made = self.expr(value);
                 self.mutable_str = false;
-                // 이 자리가 값을 혼자 쥐고 있으면 옛 값을 여기서 놓아준다.
-                if owns {
-                    let holder = self.place_ptr(*place);
-                    self.line(&format!("call void @sr_drop(ptr {holder})"));
-                }
                 self.write_place(*place, made);
             }
             Stmt::SetField {
@@ -1222,10 +1209,12 @@ impl<'a> Emitter<'a> {
                     Some(Repr::Boxed) | None => {
                         let held = self.boxed(value);
                         self.line(&format!("call void @sr_copy(ptr %out, ptr {held})"));
+                        self.line("call void @sr_frame_pop()");
                         self.line("ret void");
                     }
                     Some(ret) => {
                         let found = self.unboxed(value, ret);
+                        self.line("call void @sr_frame_pop()");
                         self.line(&format!("ret {} {found}", ret.llvm()));
                     }
                 }
@@ -1265,6 +1254,7 @@ impl<'a> Emitter<'a> {
         let end = self.label("done");
         self.line(&format!("br label %{head}"));
         self.mark(&head);
+        self.line("call void @sr_gc_point()");
         let value = self.expr(test);
         let taken = self.truth(value);
         self.line(&format!("br i1 {taken}, label %{inside}, label %{end}"));
@@ -1348,6 +1338,7 @@ impl<'a> Emitter<'a> {
         self.loops.pop();
         self.line(&format!("br label %{next}"));
         self.mark(&next);
+        self.line("call void @sr_gc_point()");
         let seen = self.temp();
         self.line(&format!("{seen} = load i64, ptr {index}, align 8"));
         let bumped = self.temp();
@@ -1396,6 +1387,7 @@ impl<'a> Emitter<'a> {
         self.loops.pop();
         self.line(&format!("br label %{next}"));
         self.mark(&next);
+        self.line("call void @sr_gc_point()");
         let seen = self.temp();
         self.line(&format!("{seen} = load i64, ptr {index}, align 8"));
         let bumped = self.temp();
@@ -1467,6 +1459,7 @@ impl<'a> Emitter<'a> {
         self.loops.pop();
         self.line(&format!("br label %{next}"));
         self.mark(&next);
+        self.line("call void @sr_gc_point()");
         let seen = self.temp();
         self.line(&format!("{seen} = load i64, ptr {counter}, align 8"));
         let bumped = self.temp();
@@ -1504,13 +1497,38 @@ impl<'a> Emitter<'a> {
         for line in &self.allocas {
             let _ = writeln!(self.functions, "{line}");
         }
+        // 값 자리는 모두 뿌리다. 등록하기 전에 비워 둬야 수집기가 쓰레기를 안 읽는다.
+        let spots = value_slots(&self.allocas);
+        let count = spots.len();
+        let _ = writeln!(
+            self.functions,
+            "  %roots = alloca [{} x ptr], align 8",
+            count.max(1)
+        );
+        for name in &spots {
+            let _ = writeln!(
+                self.functions,
+                "  store %Value zeroinitializer, ptr {name}, align 8"
+            );
+        }
+        for (at, name) in spots.iter().enumerate() {
+            let _ = writeln!(
+                self.functions,
+                "  %root{at} = getelementptr inbounds [{} x ptr], ptr %roots, i64 0, i64 {at}\n  store ptr {name}, ptr %root{at}, align 8",
+                count.max(1)
+            );
+        }
+        let _ = writeln!(
+            self.functions,
+            "  call void @sr_frame_push(ptr %roots, i64 {count})\n  call void @sr_gc_point()"
+        );
         self.functions.push_str(prologue);
         self.functions.push_str(&self.body);
         let tail = match ret {
             Repr::Boxed => "  ret void".to_string(),
             other => format!("  ret {} {}", other.llvm(), other.zero()),
         };
-        let _ = writeln!(self.functions, "{tail}\n}}\n");
+        let _ = writeln!(self.functions, "  call void @sr_frame_pop()\n{tail}\n}}\n");
     }
 
     fn enter(&mut self, name: &str, at: Option<Span>) -> Option<String> {
@@ -1734,12 +1752,37 @@ impl<'a> Emitter<'a> {
         out.push_str(DECLARES);
         out.push('\n');
         out.push_str(&self.functions);
+        // 상자에 담긴 전역과 리터럴 곳간이 붙박이 뿌리다.
+        let mut fixed: Vec<String> = (0..self.program.globals)
+            .filter(|&slot| Repr::of(self.types.globals[slot as usize]) == Repr::Boxed)
+            .map(|slot| {
+                format!(
+                    "ptr getelementptr inbounds ([{} x %Value], ptr @globals, i64 0, i64 {slot})",
+                    self.program.globals.max(1)
+                )
+            })
+            .collect();
+        let mut cached: Vec<String> = self.cached.iter().cloned().collect();
+        cached.sort();
+        fixed.extend(cached.into_iter().map(|name| format!("ptr {name}")));
+        let held = fixed.len();
+        let _ = writeln!(
+            out,
+            "@fixed = internal constant [{} x ptr] [{}]",
+            held.max(1),
+            if fixed.is_empty() {
+                "ptr null".to_string()
+            } else {
+                fixed.join(", ")
+            }
+        );
         let _ = writeln!(out, "define i32 @main() {{\nentry:");
         let _ = writeln!(out, "  call void @sr_stack_base()");
         let _ = writeln!(
             out,
             "  call void @sr_sources(ptr @sources, i64 {count}, i8 {traced})"
         );
+        let _ = writeln!(out, "  call void @sr_roots(ptr @fixed, i64 {held})");
         for id in &self.program.order {
             let _ = writeln!(out, "  call void @mod_{id}()");
         }
@@ -1811,4 +1854,12 @@ fn blocks_in(statement: &Stmt) -> Vec<&[Stmt]> {
         }
         _ => Vec::new(),
     }
+}
+
+fn value_slots(allocas: &[String]) -> Vec<String> {
+    allocas
+        .iter()
+        .filter(|line| line.ends_with("alloca %Value, align 8"))
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect()
 }

@@ -95,7 +95,7 @@ pub const WANT_GROUPED: &str = "괄호 안의 값이";
 pub const WANT_COPULA: &str = "'이다'가";
 pub const WANT_NEWLINE: &str = "줄바꿈이";
 pub const WANT_PERIOD: &str = "'.'이";
-pub const WANT_EMBEDDED: &str = "삽입된 표현식";
+pub const WANT_EMBEDDED: &str = "삽입된 표현식이";
 
 pub fn line_ended(what: &str) -> String {
     format!("줄바꿈시 누락됨: {what}")
@@ -145,8 +145,8 @@ pub fn not_assigned(name: &str) -> String {
     format!("선언되지 않은 값: '{name}'")
 }
 
-pub fn not_one(what: &str, mark: &str) -> String {
-    format!("{what}{mark} 단일하지 않음")
+pub fn not_one(what: &str) -> String {
+    format!("{what} 단일하지 않음")
 }
 
 pub fn not_keyword(word: &str, found: &str) -> String {

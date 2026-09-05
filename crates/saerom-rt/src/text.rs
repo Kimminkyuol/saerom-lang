@@ -118,6 +118,13 @@ fn cursor(text: &str) -> &'static mut Cursor {
     held
 }
 
+// 수집 뒤에는 주소가 재활용될 수 있어 기억을 버린다.
+pub fn forget() {
+    let held = unsafe { &mut *CURSOR.0.get() };
+    held.ptr = std::ptr::null();
+    held.bytes = usize::MAX;
+}
+
 pub fn char_len(text: &str) -> usize {
     cursor(text).count
 }
