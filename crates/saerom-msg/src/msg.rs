@@ -161,6 +161,10 @@ pub fn decl_bad_ending(ending: &str) -> String {
     format!("선언문에 허용되지 않는 어미: {ending}")
 }
 
+pub fn cond_group_link(closer: &str) -> String {
+    format!("'그리고', '또는', '{closer}' 누락")
+}
+
 pub fn cond_bad_ending(ending: &str) -> String {
     format!("조건에 허용되지 않는 어미: {ending}")
 }

@@ -507,13 +507,30 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn condition(&mut self) -> Result<Expr> {
-        let mut left: Option<Expr> = None;
-        let mut apart: Vec<Expr> = Vec::new();
-        let mut any = false;
-        let mut subject: Option<Expr> = None;
+        self.condition_chain(Ending::Conditional, None)
+    }
+
+    // 절은 어미로 잇고 괄호 묶음은 '그리고'·'또는'으로 잇는다.
+    // 바깥은 -면으로, 괄호 안은 -다로 끝난다.
+    fn condition_chain(&mut self, stop: Ending, outer: Option<Expr>) -> Result<Expr> {
+        let mut chain = Chain::default();
+        let mut subject = outer;
         let mut slots: Vec<Slot> = Vec::new();
         loop {
             let token = self.ahead(0);
+            if slots.is_empty() && self.starts_group() {
+                self.at += 1;
+                let piece = self.condition_chain(Ending::Final, subject.clone())?;
+                self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
+                let span = token.span;
+                let link = self.group_link(stop, span)?;
+                chain.add(piece, span);
+                if link == Link::End {
+                    return Ok(chain.fold(span));
+                }
+                chain.any = link == Link::Or;
+                continue;
+            }
             let negated_else = self.keyword_at(0, "아니면") && !slots.is_empty();
             if !negated_else && !matches!(token.tok, Tok::Verb { .. } | Tok::Copula { .. }) {
                 let value = self.primary()?;
@@ -569,41 +586,79 @@ impl<'a> Parser<'a> {
                 tail: None,
                 span,
             }));
-            if any {
-                if let Some(done) = left.take() {
-                    apart.push(done);
-                }
+            let link = self.clause_link(info.ending, stop, span)?;
+            chain.add(piece, span);
+            if link == Link::End {
+                return Ok(chain.fold(span));
             }
-            left = Some(match left {
-                None => piece,
-                Some(before) => Expr::And {
-                    left: Box::new(before),
-                    right: Box::new(piece),
-                    span,
-                },
-            });
-            match info.ending {
-                Ending::Conditional => {
-                    apart.push(left.take().expect("조건"));
-                    return Ok(apart
-                        .into_iter()
-                        .reduce(|before, next| Expr::Or {
-                            left: Box::new(before),
-                            right: Box::new(next),
-                            span,
-                        })
-                        .expect("조건"));
-                }
-                Ending::Conjunctive => any = false,
-                Ending::Alternative => any = true,
-                other => {
-                    return Err(Diag::syntax(
-                        msg::cond_bad_ending(ending_label(other)),
-                        span,
-                    ))
-                }
+            chain.any = link == Link::Or;
+        }
+    }
+
+    // 괄호 안에 이음·종결 어미가 있으면 조건 묶음이고, 없으면 그냥 값이다.
+    fn starts_group(&self) -> bool {
+        if !matches!(self.peek(), Tok::Symbol('(')) {
+            return false;
+        }
+        let Some(close) = self.matching(self.at) else {
+            return false;
+        };
+        (self.at + 1..close).any(|index| {
+            matches!(
+                self.tok_at(index),
+                Tok::Verb { ending, .. } | Tok::Copula { ending }
+                    if matches!(
+                        ending,
+                        Ending::Final
+                            | Ending::Conjunctive
+                            | Ending::Alternative
+                            | Ending::Conditional
+                    )
+            )
+        })
+    }
+
+    fn group_link(&mut self, stop: Ending, span: Span) -> Result<Link> {
+        if let Some(link) = self.link_keyword() {
+            return Ok(link);
+        }
+        if matches!(self.peek(), Tok::Copula { ending } if *ending == stop) {
+            self.at += 1;
+            return Ok(Link::End);
+        }
+        let closer = if stop == Ending::Conditional {
+            "이면"
+        } else {
+            "이다"
+        };
+        Err(Diag::syntax(msg::cond_group_link(closer), span))
+    }
+
+    fn clause_link(&mut self, ending: Ending, stop: Ending, span: Span) -> Result<Link> {
+        if ending == Ending::Final {
+            if let Some(link) = self.link_keyword() {
+                return Ok(link);
             }
         }
+        match ending {
+            Ending::Conjunctive => Ok(Link::And),
+            Ending::Alternative => Ok(Link::Or),
+            found if found == stop => Ok(Link::End),
+            other => Err(Diag::syntax(
+                msg::cond_bad_ending(ending_label(other)),
+                span,
+            )),
+        }
+    }
+
+    fn link_keyword(&mut self) -> Option<Link> {
+        if self.accept_keyword("그리고") {
+            return Some(Link::And);
+        }
+        if self.accept_keyword("또는") {
+            return Some(Link::Or);
+        }
+        None
     }
 
     pub(super) fn definition_body(&mut self) -> Result<Block> {
@@ -884,5 +939,50 @@ impl<'a> Parser<'a> {
             body,
             span,
         })
+    }
+}
+
+#[derive(PartialEq)]
+enum Link {
+    And,
+    Or,
+    End,
+}
+
+// -고는 이어 붙이고, -거나는 새 갈래를 연다.
+#[derive(Default)]
+struct Chain {
+    left: Option<Expr>,
+    apart: Vec<Expr>,
+    any: bool,
+}
+
+impl Chain {
+    fn add(&mut self, piece: Expr, span: Span) {
+        if self.any {
+            if let Some(done) = self.left.take() {
+                self.apart.push(done);
+            }
+        }
+        self.left = Some(match self.left.take() {
+            None => piece,
+            Some(before) => Expr::And {
+                left: Box::new(before),
+                right: Box::new(piece),
+                span,
+            },
+        });
+    }
+
+    fn fold(mut self, span: Span) -> Expr {
+        self.apart.push(self.left.take().expect("조건"));
+        self.apart
+            .into_iter()
+            .reduce(|before, next| Expr::Or {
+                left: Box::new(before),
+                right: Box::new(next),
+                span,
+            })
+            .expect("조건")
     }
 }
