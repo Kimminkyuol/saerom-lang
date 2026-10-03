@@ -1,12 +1,16 @@
 use crate::builtins::Builtin;
 use crate::diag::{Diag, Span};
 use crate::hir::*;
-use crate::types::{infer, Ty, Types};
+use crate::types::{Ty, Types};
 use std::collections::HashMap;
 use std::fmt::Write;
 
-pub fn emit(program: &Program, triple: &str, frames: bool) -> Result<String, Vec<Diag>> {
-    let types = infer(program);
+pub fn emit(
+    program: &Program,
+    types: Types,
+    triple: &str,
+    frames: bool,
+) -> Result<String, Vec<Diag>> {
     let reuse = crate::reuse::find(program, &types);
     let mut emitter = Emitter::new(program, types, reuse);
     emitter.frames = frames;
@@ -154,6 +158,7 @@ fn operation(op: Builtin) -> Op {
         },
         Builtin::Sub => value("sr_sub", 2),
         Builtin::Neg => value("sr_neg", 1),
+        Builtin::Sort => value("sr_sort", 1),
         Builtin::Mul => value("sr_mul", 2),
         Builtin::Div => value("sr_div", 2),
         Builtin::Rem => value("sr_rem", 2),
@@ -202,6 +207,7 @@ declare void @sr_add(ptr, ptr, ptr)
 declare void @sr_append(ptr, ptr)
 declare void @sr_sub(ptr, ptr, ptr)
 declare void @sr_neg(ptr, ptr)
+declare void @sr_sort(ptr, ptr)
 declare void @sr_mul(ptr, ptr, ptr)
 declare void @sr_div(ptr, ptr, ptr)
 declare void @sr_rem(ptr, ptr, ptr)

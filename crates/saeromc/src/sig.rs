@@ -104,6 +104,7 @@ const BUILTIN: &[(&str, &[Marker])] = &[
     ("삽입하다", &[Marker::Case("에"), Marker::Case("를")]),
     ("종료하다", &[Marker::Case("로")]),
     ("복사하다", &[Marker::Case("를")]),
+    ("정렬하다", &[Marker::Case("를")]),
     ("바꾸다", &[Marker::Case("를"), Marker::Case("로")]),
     ("더하다", &[Marker::Case("에"), Marker::Case("를")]),
     ("빼다", &[Marker::Case("에서"), Marker::Case("를")]),

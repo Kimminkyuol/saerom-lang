@@ -6,7 +6,7 @@ use crate::intern::Interner;
 use crate::load::{Loaded, UnitId};
 use crate::msg;
 use crate::sig::{describe, shown, Marker};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 const TYPE_VALUES: [&str; 4] = ["정수", "실수", "문자열", "논리값"];
@@ -20,8 +20,8 @@ struct Verb {
 #[derive(Default)]
 struct Tables {
     globals: HashMap<String, GlobalId>,
-    // 이 파일 맨 위에서 매긴 이름. 함수 안의 매김이 이리로 간다.
-    own: HashSet<String>,
+    // 이 파일 맨 위에서 매긴 이름 -> 처음 매긴 줄
+    own: HashMap<String, usize>,
     verbs: Vec<Verb>,
     nouns: HashMap<String, FuncId>,
     modules: HashMap<String, UnitId>,
@@ -31,7 +31,8 @@ struct Frame {
     unit: UnitId,
     locals: HashMap<String, LocalId>,
     count: u32,
-    inside_function: bool,
+    // 함수 안이면 정의한 줄
+    defined_at: Option<usize>,
     // 동사 자리 매개변수 -> 실제로 넘어온 동사 이름
     verbs: HashMap<String, String>,
 }
@@ -44,9 +45,11 @@ struct Generic {
 
 impl Frame {
     fn place(&mut self, name: &str, tables: &mut Tables, globals: &mut u32) -> Place {
-        if self.inside_function {
-            // 지역 > 이 파일의 전역 > 새 지역. 가져온 전역은 덮어쓰지 않는다.
-            if !self.locals.contains_key(name) && tables.own.contains(name) {
+        if let Some(defined_at) = self.defined_at {
+            // 지역 > 정의보다 앞에서 매긴 이 파일의 전역 > 새 지역.
+            // 가져온 전역은 덮어쓰지 않는다.
+            let outer = tables.own.get(name).is_some_and(|&line| line < defined_at);
+            if !self.locals.contains_key(name) && outer {
                 return Place::Global(tables.globals[name]);
             }
             return Place::Local(self.bind_local(name));
@@ -206,9 +209,10 @@ impl<'a> Resolver<'a> {
         let mut bound = Vec::new();
         bind_names(statements, &mut bound);
         // 가져온 이름과 겹쳐도 제 자리를 따로 둔다. 모듈 쪽 값은 건드리지 않는다.
-        for (name, _) in bound {
+        for (name, _, line) in bound {
             let tables = &mut self.tables[unit];
-            if tables.own.insert(name.clone()) {
+            if !tables.own.contains_key(&name) {
+                tables.own.insert(name.clone(), line);
                 tables.globals.insert(name, self.globals);
                 self.globals += 1;
             }
@@ -524,20 +528,21 @@ fn blocks_of(statement: &ASt) -> Vec<&[ASt]> {
     }
 }
 
-// (이름, 반복 변수인가)
-fn bind_names(statements: &[ASt], into: &mut Vec<(String, bool)>) {
+// (이름, 반복 변수인가, 줄)
+fn bind_names(statements: &[ASt], into: &mut Vec<(String, bool, usize)>) {
     for statement in statements {
+        let line = statement.span().line;
         match statement {
             ASt::Declare { assigns, .. } => into.extend(
                 assigns
                     .iter()
                     .filter(|(target, _)| target.fields.is_empty())
-                    .map(|(target, _)| (target.root.clone(), false)),
+                    .map(|(target, _)| (target.root.clone(), false, line)),
             ),
             ASt::Loop {
                 kind: LoopKind::Range { variable, .. } | LoopKind::Each { variable, .. },
                 ..
-            } => into.push((variable.clone(), true)),
+            } => into.push((variable.clone(), true, line)),
             ASt::Define { .. } | ASt::Noun { .. } => continue,
             _ => {}
         }
@@ -559,7 +564,7 @@ impl<'a> Resolver<'a> {
             unit,
             locals: HashMap::new(),
             count: 0,
-            inside_function: false,
+            defined_at: None,
             verbs: HashMap::new(),
         };
         let mut init = Vec::new();
@@ -662,7 +667,7 @@ impl<'a> Resolver<'a> {
                 unit,
                 locals: HashMap::new(),
                 count: 0,
-                inside_function: true,
+                defined_at: Some(statement.span().line),
                 verbs: self.bindings[index].clone(),
             };
             // 동사 자리가 채워지지 않은 틀은 부를 수 없다. 특수화한 것만 낮춘다.
@@ -689,7 +694,7 @@ impl<'a> Resolver<'a> {
             let mut bound = Vec::new();
             bind_names(body, &mut bound);
             // 반복 변수는 언제나 지역
-            for (name, looped) in bound {
+            for (name, looped, _) in bound {
                 if looped {
                     frame.bind_local(&name);
                 } else {
@@ -1040,9 +1045,10 @@ impl<'a> Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
-    fn wrap(&mut self, value: Expr, call: &ast::CallExpr) -> Expr {
+    // verb: 오류에 보일 동사 이름
+    fn wrap(&mut self, value: Expr, call: &ast::CallExpr, verb: &str) -> Expr {
         let value = if call.asks {
-            let verb = self.names.intern(&call.verb);
+            let verb = self.names.intern(verb);
             Expr::Ask {
                 value: Box::new(value),
                 verb,
@@ -1235,7 +1241,7 @@ impl<'a> Resolver<'a> {
                 args: order_args(args, &params),
                 span: call.span,
             };
-            return Some(self.wrap(made, call));
+            return Some(self.wrap(made, call, &predicate));
         }
         None
     }
@@ -1382,7 +1388,7 @@ impl<'a> Resolver<'a> {
                 args: order_args(args, &params),
                 span: call.span,
             };
-            return self.wrap(made, call);
+            return self.wrap(made, call, &call.verb);
         }
         if !namespaced {
             if let Some(def) = builtins::find(verb, &used) {
@@ -1391,7 +1397,7 @@ impl<'a> Resolver<'a> {
                     args: order_args(args, def.params),
                     span: call.span,
                 };
-                return self.wrap(made, call);
+                return self.wrap(made, call, &call.verb);
             }
         }
         self.unknown_call(frame.unit, home, namespaced, verb, &used, call.span);

@@ -55,3 +55,24 @@ fn arithmetic_on_known_non_numbers_is_caught() {
         ]
     );
 }
+
+#[test]
+fn collection_ops_on_known_non_tables_are_caught() {
+    let source = "수는 3이다.\n수에 1을 추가한다.\n\"{수의 1번째}\"를 출력한다.\n상자는 1과 2이다.\n\"{상자의 (\"가\")번째}\"를 출력한다.\n";
+    let found = saeromc::analyze(source, None)
+        .err()
+        .expect("오류가 나야 함");
+    let messages: Vec<&str> = found
+        .errors
+        .iter()
+        .map(|error| error.msg.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "'추가하다'의 대상이 묶음이 아님: 수",
+            "수에 자리가 없음",
+            "자리가 정수가 아님: 가",
+        ]
+    );
+}

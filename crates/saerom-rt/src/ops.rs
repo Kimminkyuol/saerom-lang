@@ -517,6 +517,22 @@ fn order(verb: &str, left: &Value, right: &Value) -> std::cmp::Ordering {
     )
 }
 
+// 자리만 정렬한 새 묶음. 명칭은 그대로 옮긴다.
+#[no_mangle]
+pub unsafe extern "C" fn sr_sort(out: *mut Value, found: *const Value) {
+    let found = at(found);
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("정렬하다", found.kind()));
+    }
+    let held = found.as_table();
+    let mut items = held.items.clone();
+    items.sort_by(|left, right| order("정렬하다", left, right));
+    *out = Value::table(Table {
+        items,
+        keys: held.keys.clone(),
+    });
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sr_greater(out: *mut Value, left: *const Value, right: *const Value) {
     *out = Value::bool(order("크다", at(left), at(right)).is_gt());

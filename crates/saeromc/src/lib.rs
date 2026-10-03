@@ -67,6 +67,15 @@ pub fn analyze(
     source: &str,
     path: Option<&Path>,
 ) -> Result<(load::Loaded, hir::Program), Failure> {
+    let (loaded, program, _) = analyze_typed(source, path)?;
+    Ok((loaded, program))
+}
+
+// 추론 결과를 코드 생성에 넘겨 두 번 돌지 않는다.
+fn analyze_typed(
+    source: &str,
+    path: Option<&Path>,
+) -> Result<(load::Loaded, hir::Program, types::Types), Failure> {
     let loaded = load::load(source, path).map_err(|error| Failure {
         loaded: None,
         errors: vec![error],
@@ -79,15 +88,16 @@ pub fn analyze(
         });
     }
     let checked = resolve::resolve(&loaded).and_then(|program| {
-        let wrong = types::check(&program, &types::infer(&program));
+        let found = types::infer(&program);
+        let wrong = types::check(&program, &found);
         if wrong.is_empty() {
-            Ok(program)
+            Ok((program, found))
         } else {
             Err(wrong)
         }
     });
     match checked {
-        Ok(program) => Ok((loaded, program)),
+        Ok((program, found)) => Ok((loaded, program, found)),
         Err(errors) => Err(Failure {
             loaded: Some(loaded),
             errors,
@@ -101,8 +111,8 @@ pub fn compile(
     triple: &str,
     frames: bool,
 ) -> Result<String, Failure> {
-    let (loaded, program) = analyze(source, path)?;
-    emit::emit(&program, triple, frames).map_err(|errors| Failure {
+    let (loaded, program, found) = analyze_typed(source, path)?;
+    emit::emit(&program, found, triple, frames).map_err(|errors| Failure {
         loaded: Some(loaded),
         errors,
     })

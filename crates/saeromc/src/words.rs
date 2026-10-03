@@ -125,6 +125,7 @@ pub const BUILTIN_VERBS: &[Builtin] = &[
     verb("추가하다", "추가하"),
     verb("제거하다", "제거하"),
     verb("삽입하다", "삽입하"),
+    verb("정렬하다", "정렬하"),
     verb("바꾸다", "바꾸"),
     verb("더하다", "더하"),
     verb("빼다", "빼"),

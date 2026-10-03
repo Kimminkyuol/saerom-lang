@@ -113,6 +113,7 @@ impl Types {
             Builtin::Read | Builtin::Open | Builtin::Write => Ty::Any,
             Builtin::Close => Ty::Nothing,
             Builtin::Clone => arg(0),
+            Builtin::Sort => Ty::Table,
             Builtin::Convert => self.converted(function, args),
             Builtin::Add => match (arg(0), arg(1)) {
                 (Ty::Str, _) => Ty::Str,
@@ -514,6 +515,15 @@ fn check_block(
         for expr in exprs {
             check_expr(types, function, unit, expr, found);
         }
+        if let Stmt::SetAt {
+            owner, place, span, ..
+        } = statement
+        {
+            let mut wrong = Vec::new();
+            table_only(types, function, "자리", owner, &mut wrong);
+            int_place(types, function, place, &mut wrong);
+            report(found, wrong, *span, unit);
+        }
         for block in blocks(statement) {
             check_block(types, function, unit, block, found);
         }
@@ -544,6 +554,16 @@ fn check_expr(
     for each in inner {
         check_expr(types, function, unit, each, found);
     }
+    if let Expr::Index { owner, place, span } = expr {
+        let mut wrong = Vec::new();
+        int_place(types, function, place, &mut wrong);
+        let ty = types.of(function, owner);
+        if known(ty) && !matches!(ty, Ty::Table | Ty::Str) {
+            wrong.push((msg::NAME, msg::no_place(kind_of(ty))));
+        }
+        report(found, wrong, *span, unit);
+        return;
+    }
     let Expr::Call {
         callee: Callee::Op(op),
         args,
@@ -557,7 +577,22 @@ fn check_expr(
         error.unit = Some(unit);
         found.push(error);
     };
-    let known = |ty: Ty| !matches!(ty, Ty::Any | Ty::Never);
+    let table_verb = match op {
+        Builtin::Push => Some("추가하다"),
+        Builtin::Insert => Some("삽입하다"),
+        Builtin::Sort => Some("정렬하다"),
+        Builtin::RemoveAt | Builtin::RemoveKey => Some("제거하다"),
+        _ => None,
+    };
+    if let (Some(verb), [owner, rest @ ..]) = (table_verb, args.as_slice()) {
+        let mut wrong = Vec::new();
+        table_only(types, function, verb, owner, &mut wrong);
+        if matches!(op, Builtin::Insert | Builtin::RemoveAt) {
+            int_place(types, function, &rest[0], &mut wrong);
+        }
+        report(found, wrong, *span, unit);
+        return;
+    }
     if let (Builtin::Greater | Builtin::Less, [left, right]) = (op, args.as_slice()) {
         let tys = [types.of(function, left), types.of(function, right)];
         let fits = (tys[0].number() && tys[1].number()) || tys == [Ty::Str, Ty::Str];
@@ -636,4 +671,47 @@ fn shown_of(expr: &Expr, ty: Ty) -> String {
         _ if ty == Ty::Nothing => "없음".to_string(),
         _ => String::new(),
     }
+}
+
+fn known(ty: Ty) -> bool {
+    !matches!(ty, Ty::Any | Ty::Never)
+}
+
+type Wrong = Vec<(&'static str, String)>;
+
+fn report(found: &mut Vec<Diag>, wrong: Wrong, span: crate::diag::Span, unit: usize) {
+    for (kind, text) in wrong {
+        let mut error = Diag::new(kind, text, span);
+        error.unit = Some(unit);
+        found.push(error);
+    }
+}
+
+fn table_only(
+    types: &Types,
+    function: Option<FuncId>,
+    verb: &str,
+    owner: &Expr,
+    wrong: &mut Wrong,
+) {
+    let ty = types.of(function, owner);
+    if known(ty) && ty != Ty::Table {
+        wrong.push((msg::VALUE, msg::not_table(verb, kind_of(ty))));
+    }
+}
+
+// 실행 시처럼 값을 글로 보인다. 값을 모르면 자료형.
+fn int_place(types: &Types, function: Option<FuncId>, place: &Expr, wrong: &mut Wrong) {
+    let ty = types.of(function, place);
+    if !known(ty) || ty == Ty::Int {
+        return;
+    }
+    let shown = match place {
+        Expr::Str(text) => text.to_string(),
+        _ => match shown_of(place, ty) {
+            found if found.is_empty() => kind_of(ty).to_string(),
+            found => found,
+        },
+    };
+    wrong.push((msg::VALUE, msg::place_not_int(&shown)));
 }
