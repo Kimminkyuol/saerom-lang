@@ -95,10 +95,26 @@ fn imported_stems(
     stems
 }
 
+// 소스 옆 > 표준 모듈
 pub fn resolve_module(name: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
     let wanted = crate::hangul::to_nfc(&format!("{name}.sr"));
-    let found = find_in(base_dir?, &wanted)?;
+    let found = base_dir
+        .and_then(|folder| find_in(folder, &wanted))
+        .or_else(|| std_dirs().iter().find_map(|folder| find_in(folder, &wanted)))?;
     Some(found.canonicalize().unwrap_or(found))
+}
+
+fn std_dirs() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if let Some(given) = std::env::var_os("SAEROM_STD") {
+        found.push(PathBuf::from(given));
+    }
+    if let Some(here) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+        found.push(here.join("../lib/saerom/std"));
+    }
+    // 저장소에서 바로 돌릴 때
+    found.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std"));
+    found
 }
 
 fn find_in(folder: &Path, wanted: &str) -> Option<PathBuf> {
@@ -157,7 +173,9 @@ fn gather(
         }
     }
     if root {
-        shadowed(&vocab, &tokens)?;
+        // 가져온 동사와 겹치는 이름은 이 파일의 이름이 이긴다.
+        let own = Vocabulary::new(HashSet::new(), declared_stems(&tokens));
+        shadowed(&own, &tokens)?;
         into.vocab = vocab;
         into.tokens.clone_from(&tokens);
     }

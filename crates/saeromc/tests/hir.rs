@@ -33,3 +33,24 @@ fn unknown_verbs_and_particles_are_caught() {
         "{messages:?}"
     );
 }
+
+#[test]
+fn arithmetic_on_known_non_numbers_is_caught() {
+    let source = "글은 \"가\"이다.\n\"{1에 \"가\"를 더한 값} {3에서 글을 뺀 값} {-참}\"을 출력한다.\n\"{글에 1을 더한 값}\"을 출력한다.\n";
+    let found = saeromc::analyze(source, None)
+        .err()
+        .expect("오류가 나야 함");
+    let messages: Vec<&str> = found
+        .errors
+        .iter()
+        .map(|error| error.msg.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "'더하다'의 인자가 수가 아님: 문자열 \"가\"",
+            "'빼다'의 인자가 수가 아님: 문자열",
+            "'빼다'의 인자가 수가 아님: 논리값 참",
+        ]
+    );
+}

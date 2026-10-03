@@ -1,4 +1,6 @@
 use crate::builtins::Builtin;
+use crate::diag::Diag;
+use crate::msg;
 use crate::hir::*;
 use crate::intern::Symbol;
 use std::collections::HashMap;
@@ -452,5 +454,133 @@ pub fn always_returns(body: &[Stmt]) -> bool {
             branches.iter().all(|(_, block)| always_returns(block)) && always_returns(otherwise)
         }
         _ => false,
+    }
+}
+
+// 타입이 확정된 셈 인자가 수가 아니면 실행 전에 알린다. 실행 시 검사와 같은 규칙.
+pub fn check(program: &Program, types: &Types) -> Vec<Diag> {
+    let mut found = Vec::new();
+    for module in &program.modules {
+        check_block(types, None, module.unit, &module.init, &mut found);
+    }
+    for (id, function) in program.functions.iter().enumerate() {
+        let unit = program.modules[function.module as usize].unit;
+        check_block(types, Some(id as FuncId), unit, &function.body, &mut found);
+    }
+    // 동사 자리 특수화로 같은 몸통이 여럿일 수 있다.
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|error| seen.insert((error.unit, error.span.line, error.span.col)));
+    found
+}
+
+fn check_block(
+    types: &Types,
+    function: Option<FuncId>,
+    unit: usize,
+    body: &[Stmt],
+    found: &mut Vec<Diag>,
+) {
+    for statement in body {
+        let exprs: Vec<&Expr> = match statement {
+            Stmt::Set { value, .. } | Stmt::Eval(value) | Stmt::Return { value, .. } => {
+                vec![value]
+            }
+            Stmt::SetField { owner, value, .. } => vec![owner, value],
+            Stmt::SetPick {
+                owner, key, value, ..
+            } => vec![owner, key, value],
+            Stmt::SetAt {
+                owner,
+                place,
+                value,
+                ..
+            } => vec![owner, place, value],
+            Stmt::Each { over, .. } => vec![over],
+            Stmt::If { branches, .. } => branches.iter().map(|(test, _)| test).collect(),
+            Stmt::Range {
+                start, stop, step, ..
+            } => [Some(start), Some(stop), step.as_ref()].into_iter().flatten().collect(),
+            Stmt::While { test, .. } => vec![test],
+            Stmt::Break | Stmt::Continue => Vec::new(),
+        };
+        for expr in exprs {
+            check_expr(types, function, unit, expr, found);
+        }
+        for block in blocks(statement) {
+            check_block(types, function, unit, block, found);
+        }
+    }
+}
+
+fn check_expr(
+    types: &Types,
+    function: Option<FuncId>,
+    unit: usize,
+    expr: &Expr,
+    found: &mut Vec<Diag>,
+) {
+    let inner: Vec<&Expr> = match expr {
+        Expr::Table(items, entries) => {
+            items.iter().chain(entries.iter().map(|(_, value)| value)).collect()
+        }
+        Expr::Template(items) => items.iter().collect(),
+        Expr::Field { owner, .. } => vec![owner],
+        Expr::Index { owner, place, .. } => vec![owner, place],
+        Expr::Pick { owner, key, .. } => vec![owner, key],
+        Expr::Not(value) | Expr::Ask { value, .. } => vec![value],
+        Expr::And(left, right) | Expr::Or(left, right) => vec![left, right],
+        Expr::Call { args, .. } => args.iter().collect(),
+        _ => Vec::new(),
+    };
+    for each in inner {
+        check_expr(types, function, unit, each, found);
+    }
+    let Expr::Call {
+        callee: Callee::Op(op),
+        args,
+        span,
+    } = expr
+    else {
+        return;
+    };
+    let verb = match op {
+        Builtin::Add => "더하다",
+        Builtin::Sub => "빼다",
+        Builtin::Mul => "곱하다",
+        Builtin::Div | Builtin::Quot | Builtin::Rem => "나누다",
+        _ => return,
+    };
+    let [left, right] = args.as_slice() else {
+        return;
+    };
+    let tys = [types.of(function, left), types.of(function, right)];
+    // 글에 더하면 이어붙이기. 앞이 미정이면 글일 수 있다.
+    if *op == Builtin::Add && matches!(tys[0], Ty::Str | Ty::Any) {
+        return;
+    }
+    let odd = |ty: &Ty| !ty.number() && !matches!(ty, Ty::Any | Ty::Never);
+    let Some(at) = tys.iter().position(odd) else {
+        return;
+    };
+    let mut error = Diag::new(msg::VALUE, describe(verb, &args[at], tys[at]), *span);
+    error.unit = Some(unit);
+    found.push(error);
+}
+
+// 실행 시 메시지와 같은 꼴. 값을 알면 값도 보인다.
+fn describe(verb: &str, expr: &Expr, ty: Ty) -> String {
+    let kind = match ty {
+        Ty::Bool => "논리값",
+        Ty::Str => "문자열",
+        Ty::Table => "묶음",
+        _ => "값",
+    };
+    match expr {
+        Expr::Str(text) => msg::arg_not_number(verb, kind, &format!("\"{text}\"")),
+        Expr::Bool(value) => {
+            msg::arg_not_number(verb, kind, if *value { "참" } else { "거짓" })
+        }
+        _ if ty == Ty::Nothing => msg::arg_not_number(verb, kind, "없음"),
+        _ => msg::arg_not_number_kind(verb, kind),
     }
 }

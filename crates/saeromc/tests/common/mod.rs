@@ -10,8 +10,9 @@ pub fn root() -> PathBuf {
 }
 
 pub fn sources() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir(root().join("examples"))
-        .expect("examples 자리 없음")
+    let mut found: Vec<PathBuf> = ["examples", "std"]
+        .iter()
+        .flat_map(|folder| std::fs::read_dir(root().join(folder)).expect("소스 자리 없음"))
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "sr"))
         .collect();

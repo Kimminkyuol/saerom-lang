@@ -78,7 +78,15 @@ pub fn analyze(
             errors,
         });
     }
-    match resolve::resolve(&loaded) {
+    let checked = resolve::resolve(&loaded).and_then(|program| {
+        let wrong = types::check(&program, &types::infer(&program));
+        if wrong.is_empty() {
+            Ok(program)
+        } else {
+            Err(wrong)
+        }
+    });
+    match checked {
         Ok(program) => Ok((loaded, program)),
         Err(errors) => Err(Failure {
             loaded: Some(loaded),

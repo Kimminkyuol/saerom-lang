@@ -138,16 +138,6 @@ pub const BUILTIN_VERBS: &[Builtin] = &[
     verb("넘어가다", "넘어가"),
     verb("반환하다", "반환하"),
     Builtin {
-        name: "잇다",
-        stem: "잇",
-        pos: Pos::Verb,
-        overrides: &[
-            (Ending::Auxiliary, "이어"),
-            (Ending::AdnominalPast, "이은"),
-            (Ending::Conditional, "이으면"),
-        ],
-    },
-    Builtin {
         name: "않다",
         stem: "않",
         pos: Pos::Descriptive,

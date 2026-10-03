@@ -357,6 +357,47 @@ impl<'a> Parser<'a> {
                 self.at += 1;
                 Ok(Expr::Name { name, span })
             }
+            // -값: 바로 뒤 값 하나에만 붙는다. `-수의 절댓값`은 `(-수)의 절댓값`.
+            Tok::Symbol('-') => {
+                self.at += 1;
+                let value = self.primary()?;
+                Ok(match value {
+                    Expr::Literal {
+                        value: Literal::Int(found),
+                        span,
+                    } if found != i64::MIN => Expr::Literal {
+                        value: Literal::Int(-found),
+                        span,
+                    },
+                    Expr::Literal {
+                        value: Literal::Float(found),
+                        span,
+                    } => Expr::Literal {
+                        value: Literal::Float(-found),
+                        span,
+                    },
+                    value => Expr::Call(Box::new(CallExpr {
+                        verb: "빼다".into(),
+                        slots: vec![
+                            Slot {
+                                marker: Marker::Case("에서"),
+                                expr: Expr::Literal {
+                                    value: Literal::Int(0),
+                                    span,
+                                },
+                            },
+                            Slot {
+                                marker: Marker::Case("를"),
+                                expr: value,
+                            },
+                        ],
+                        negated: false,
+                        asks: false,
+                        tail: Some("값".into()),
+                        span,
+                    })),
+                })
+            }
             Tok::Symbol('(') => {
                 self.at += 1;
                 let value = self.grouped(span)?;

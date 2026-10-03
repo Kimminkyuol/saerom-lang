@@ -6,7 +6,7 @@ use crate::intern::Interner;
 use crate::load::{Loaded, UnitId};
 use crate::msg;
 use crate::sig::{describe, shown, Marker};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 const TYPE_VALUES: [&str; 4] = ["정수", "실수", "문자열", "논리값"];
@@ -20,6 +20,8 @@ struct Verb {
 #[derive(Default)]
 struct Tables {
     globals: HashMap<String, GlobalId>,
+    // 이 파일 맨 위에서 매긴 이름. 함수 안의 매김이 이리로 간다.
+    own: HashSet<String>,
     verbs: Vec<Verb>,
     nouns: HashMap<String, FuncId>,
     modules: HashMap<String, UnitId>,
@@ -43,9 +45,10 @@ struct Generic {
 impl Frame {
     fn place(&mut self, name: &str, tables: &mut Tables, globals: &mut u32) -> Place {
         if self.inside_function {
-            // 함수 안의 매김은 언제나 지역이다. 전역으로 새면 이름이 겹치는 것만으로
-            // 남의 전역(모듈 상수 포함)을 덮어쓴다.
-            let _ = tables;
+            // 지역 > 이 파일의 전역 > 새 지역. 가져온 전역은 덮어쓰지 않는다.
+            if !self.locals.contains_key(name) && tables.own.contains(name) {
+                return Place::Global(tables.globals[name]);
+            }
             return Place::Local(self.bind_local(name));
         }
         Place::Global(global_slot(name, tables, globals))
@@ -204,8 +207,13 @@ impl<'a> Resolver<'a> {
         self.declare_functions(unit, statements);
         let mut bound = Vec::new();
         bind_names(statements, &mut bound);
-        for name in bound {
-            global_slot(&name, &mut self.tables[unit], &mut self.globals);
+        // 가져온 이름과 겹쳐도 제 자리를 따로 둔다. 모듈 쪽 값은 건드리지 않는다.
+        for (name, _) in bound {
+            let tables = &mut self.tables[unit];
+            if tables.own.insert(name.clone()) {
+                tables.globals.insert(name, self.globals);
+                self.globals += 1;
+            }
         }
 
         for statement in statements {
@@ -519,19 +527,20 @@ fn blocks_of(statement: &ASt) -> Vec<&[ASt]> {
     }
 }
 
-fn bind_names(statements: &[ASt], into: &mut Vec<String>) {
+// (이름, 반복 변수인가)
+fn bind_names(statements: &[ASt], into: &mut Vec<(String, bool)>) {
     for statement in statements {
         match statement {
             ASt::Declare { assigns, .. } => into.extend(
                 assigns
                     .iter()
                     .filter(|(target, _)| target.fields.is_empty())
-                    .map(|(target, _)| target.root.clone()),
+                    .map(|(target, _)| (target.root.clone(), false)),
             ),
             ASt::Loop {
                 kind: LoopKind::Range { variable, .. } | LoopKind::Each { variable, .. },
                 ..
-            } => into.push(variable.clone()),
+            } => into.push((variable.clone(), true)),
             ASt::Define { .. } | ASt::Noun { .. } => continue,
             _ => {}
         }
@@ -681,8 +690,13 @@ impl<'a> Resolver<'a> {
             };
             let mut bound = Vec::new();
             bind_names(body, &mut bound);
-            for name in bound {
-                frame.place(&name, &mut self.tables[unit], &mut self.globals);
+            // 반복 변수는 언제나 지역
+            for (name, looped) in bound {
+                if looped {
+                    frame.bind_local(&name);
+                } else {
+                    frame.place(&name, &mut self.tables[unit], &mut self.globals);
+                }
             }
             let taken: std::collections::HashSet<String> = frame.locals.keys().cloned().collect();
             let given: std::collections::HashSet<String> = match statement {

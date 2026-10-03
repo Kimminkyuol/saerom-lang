@@ -66,7 +66,7 @@ pub struct Vocabulary {
 
 impl Vocabulary {
     // 이름이 어떤 동사의 활용형과 같은지. split_word 에서 이름이 이기므로,
-    // 겹치면 그 동사가 파일 전체에서 조용히 사라진다.
+    // 겹치면 그 활용형이 파일 전체에서 조용히 사라진다.
     pub fn verb_named(&self, word: &str) -> Option<&str> {
         words::builtin_forms()
             .get(word)
@@ -196,7 +196,7 @@ impl Lexer<'_> {
                     j,
                 ));
                 i = j;
-            } else if ".:()".contains(ch) {
+            } else if ".:()".contains(ch) || negates(chars, i) {
                 out.push(Token::new(Tok::Symbol(ch), line, i, i + 1));
                 i += 1;
             } else if is_word_char(ch) {
@@ -312,6 +312,11 @@ impl Lexer<'_> {
         }
         one(Tok::Name(chunk.into()))
     }
+}
+
+// 값 앞의 `-`. 숫자 앞은 리터럴로 이미 먹었다.
+fn negates(chars: &[char], at: usize) -> bool {
+    chars[at] == '-' && matches!(chars.get(at + 1), Some(&c) if c == '(' || c == '"' || is_word_char(c))
 }
 
 fn is_word_char(ch: char) -> bool {

@@ -186,6 +186,11 @@ impl Value {
 
 
 pub fn equal(left: &Value, right: &Value) -> bool {
+    equal_in(left, right, &mut Vec::new())
+}
+
+// open: 비교 중인 묶음 쌍. 다시 만나면 같다고 본다.
+fn equal_in(left: &Value, right: &Value, open: &mut Vec<(u64, u64)>) -> bool {
     if left.number() && right.number() {
         if left.tag == INT && right.tag == INT {
             return left.as_int() == right.as_int();
@@ -200,13 +205,20 @@ pub fn equal(left: &Value, right: &Value) -> bool {
         BOOL => left.as_bool() == right.as_bool(),
         STR => left.as_text() == right.as_text(),
         TABLE => {
+            let pair = (left.bits, right.bits);
+            if left.bits == right.bits || open.contains(&pair) {
+                return true;
+            }
+            open.push(pair);
             let (a, b) = (left.as_table(), right.as_table());
-            a.items.len() == b.items.len()
+            let same = a.items.len() == b.items.len()
                 && a.keys.len() == b.keys.len()
-                && a.items.iter().zip(b.items.iter()).all(|(x, y)| equal(x, y))
-                && a.keys
-                    .iter()
-                    .all(|(key, value)| b.get(key).is_some_and(|kept| equal(value, &kept)))
+                && a.items.iter().zip(b.items.iter()).all(|(x, y)| equal_in(x, y, open))
+                && a.keys.iter().all(|(key, value)| {
+                    b.get(key).is_some_and(|kept| equal_in(value, &kept, open))
+                });
+            open.pop();
+            same
         }
         _ => left.bits == right.bits,
     }

@@ -1,8 +1,8 @@
 use crate::msg;
-
 use crate::text::{show, to_text, write_text};
 use crate::value::*;
 use crate::{fault::fail, io::flush_out};
+use std::collections::HashMap;
 
 
 pub type Nouns = Option<
@@ -127,18 +127,28 @@ pub unsafe extern "C" fn sr_template(out: *mut Value, parts: *const Value, count
 }
 
 fn deep_copy(found: &Value) -> Value {
+    copy_in(found, &mut HashMap::new())
+}
+
+// made: 원본 → 사본. 순환과 공유를 그대로 옮긴다.
+fn copy_in(found: &Value, made: &mut HashMap<u64, Value>) -> Value {
     if found.tag != TABLE {
         return *found;
     }
+    if let Some(copy) = made.get(&found.bits) {
+        return *copy;
+    }
+    let copy = Value::table(Table::default());
+    made.insert(found.bits, copy);
     let held = found.as_table();
-    Value::table(Table {
-        items: held.items.iter().map(deep_copy).collect(),
-        keys: held
-            .keys
-            .iter()
-            .map(|(key, value)| (*key, deep_copy(value)))
-            .collect(),
-    })
+    let items = held.items.iter().map(|item| copy_in(item, made)).collect();
+    let keys = held
+        .keys
+        .iter()
+        .map(|(key, value)| (*key, copy_in(value, made)))
+        .collect();
+    *copy.as_table() = Table { items, keys };
+    copy
 }
 
 fn at_index(found: &Value, index: usize) -> Value {
@@ -147,7 +157,7 @@ fn at_index(found: &Value, index: usize) -> Value {
         _ => Value::text(
             crate::text::char_at(found.as_text(), index)
                 .expect("글자")
-                .to_string(),
+                .to_owned(),
         ),
     }
 }

@@ -1,4 +1,5 @@
 use std::cell::UnsafeCell;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::value::{Value, BOOL, FLOAT, INT, STR, TABLE};
 
@@ -9,6 +10,11 @@ pub fn to_text(value: &Value) -> String {
 }
 
 pub fn write_text(into: &mut String, value: &Value) {
+    write(into, value, &mut Vec::new());
+}
+
+// open: 지금 펼치는 묶음들. 순환이면 줄인다.
+fn write(into: &mut String, value: &Value, open: &mut Vec<u64>) {
     use std::fmt::Write;
     match value.tag {
         BOOL => into.push_str(if value.as_bool() { "참" } else { "거짓" }),
@@ -17,14 +23,16 @@ pub fn write_text(into: &mut String, value: &Value) {
         }
         FLOAT => into.push_str(&float_text(value.as_float())),
         STR => into.push_str(value.as_text()),
+        TABLE if open.contains(&value.bits) => into.push_str("{…}"),
         TABLE => {
+            open.push(value.bits);
             let table = value.as_table();
             into.push('{');
             for (at, item) in table.items.iter().enumerate() {
                 if at > 0 {
                     into.push_str(", ");
                 }
-                write_text(into, item);
+                write(into, item, open);
             }
             for (at, (key, item)) in table.keys.iter().enumerate() {
                 if at > 0 || !table.items.is_empty() {
@@ -32,9 +40,10 @@ pub fn write_text(into: &mut String, value: &Value) {
                 }
                 into.push_str(key);
                 into.push_str(": ");
-                write_text(into, item);
+                write(into, item, open);
             }
             into.push('}');
+            open.pop();
         }
         _ => into.push_str("없음"),
     }
@@ -82,7 +91,7 @@ fn trim(shown: &str) -> String {
         .to_string()
 }
 
-// 글자 단위 색인 커서. UTF-8 을 그대로 두는 대신 마지막으로 짚은 자리를
+// 글자(grapheme) 단위 색인 커서. UTF-8 을 그대로 두는 대신 마지막으로 짚은 자리를
 // 하나만 기억한다. `1부터 길이까지` 앞으로 훑는 고리가 O(n^2) → O(n) 이 된다.
 struct Cursor {
     ptr: *const u8,
@@ -110,7 +119,7 @@ fn cursor(text: &str) -> &'static mut Cursor {
         *held = Cursor {
             ptr: text.as_ptr(),
             bytes: text.len(),
-            count: text.chars().count(),
+            count: text.graphemes(true).count(),
             at: 0,
             off: 0,
         };
@@ -129,31 +138,26 @@ pub fn char_len(text: &str) -> usize {
     cursor(text).count
 }
 
-pub fn char_at(text: &str, index: usize) -> Option<char> {
+pub fn char_at(text: &str, index: usize) -> Option<&str> {
     let held = cursor(text);
     if index >= held.count {
         return None;
     }
     if held.count == held.bytes {
-        return text.as_bytes().get(index).map(|&byte| byte as char);
+        return text.get(index..index + 1);
     }
     if index < held.at {
         held.at = 0;
         held.off = 0;
     }
-    let bytes = text.as_bytes();
     while held.at < index {
-        held.off += width(bytes[held.off]);
+        held.off += next_char(&text[held.off..]).len();
         held.at += 1;
     }
-    text[held.off..].chars().next()
+    Some(next_char(&text[held.off..]))
 }
 
-fn width(lead: u8) -> usize {
-    match lead {
-        0x00..=0x7f => 1,
-        0xc0..=0xdf => 2,
-        0xe0..=0xef => 3,
-        _ => 4,
-    }
+fn next_char(text: &str) -> &str {
+    text.graphemes(true).next().unwrap_or("")
 }
+

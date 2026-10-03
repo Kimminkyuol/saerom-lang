@@ -271,6 +271,11 @@ pub fn arg_not_number(verb: &str, kind: &str, shown: &str) -> String {
     format!("'{verb}'의 인자가 수가 아님: {kind} {shown}")
 }
 
+// 값을 모를 때(컴파일 시점)
+pub fn arg_not_number_kind(verb: &str, kind: &str) -> String {
+    format!("'{verb}'의 인자가 수가 아님: {kind}")
+}
+
 pub fn not_table(verb: &str, kind: &str) -> String {
     format!("'{verb}'의 대상이 묶음이 아님: {kind}")
 }
