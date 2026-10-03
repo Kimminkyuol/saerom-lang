@@ -4,7 +4,13 @@ use super::*;
 
 impl<'a> Emitter<'a> {
     // i64 산술은 조용히 감기지 않는다. 넘치면 그 자리에서 멈춘다.
-    pub(super) fn overflowed(&mut self, whole_op: &str, a: &str, b: &str, span: Span) -> String {
+    pub(super) fn overflowed(
+        &mut self,
+        whole_op: &str,
+        a: &str,
+        b: &str,
+        span: Span,
+    ) -> String {
         let (intrinsic, verb) = match whole_op {
             "add" => ("sadd", "더하다"),
             "sub" => ("ssub", "빼다"),
@@ -30,7 +36,12 @@ impl<'a> Emitter<'a> {
         out
     }
 
-    pub(super) fn inline_op(&mut self, op: Builtin, args: &'a [Expr], span: Span) -> Option<Val> {
+    pub(super) fn inline_op(
+        &mut self,
+        op: Builtin,
+        args: &'a [Expr],
+        span: Span,
+    ) -> Option<Val> {
         if args.len() != 2 {
             if op == Builtin::Truthy && args.len() == 1 && self.type_of(&args[0]) == Ty::Bool {
                 return Some(self.expr(&args[0]));

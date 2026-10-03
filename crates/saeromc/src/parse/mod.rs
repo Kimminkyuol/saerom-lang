@@ -230,7 +230,6 @@ impl<'a> Parser<'a> {
         run(self)
     }
 
-
     fn block(&mut self) -> Result<Block> {
         self.expect(&Tok::Symbol(':'), msg::WANT_COLON)?;
         self.expect(&Tok::Newline, msg::WANT_NEWLINE)?;
@@ -260,7 +259,6 @@ impl<'a> Parser<'a> {
         Ok(statements)
     }
 }
-
 
 // 계수기처럼 한 칸 올린다. 더 돌릴 데가 없으면 거짓.
 fn bump(plan: &mut Vec<usize>, counts: &[usize]) -> bool {
@@ -412,4 +410,3 @@ mod stmt;
 fn not_dictionary_form(span: Span) -> Diag {
     Diag::syntax(msg::HEAD_NOT_DICT, span).with_hint(msg::HEAD_NOT_DICT_HELP)
 }
-

@@ -1,9 +1,9 @@
 //! 내보내기와 파일.
 
-use crate::msg;
-use crate::value::*;
 use crate::fault::fail;
+use crate::msg;
 use crate::text::{show, to_text, write_text};
+use crate::value::*;
 use std::io::Write;
 
 pub(crate) static mut OUT: String = String::new();
@@ -76,7 +76,6 @@ pub unsafe extern "C" fn sr_open(out: *mut Value, path: *const Value, how: *cons
         Err(_) => Value::nothing(),
     };
 }
-
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_read(out: *mut Value, file: *const Value, count: *const Value) {

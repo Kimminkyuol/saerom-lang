@@ -6,7 +6,6 @@ use crate::sig::{ordered, Marker, Signatures};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-
 fn scan(
     source: &str,
     base_dir: Option<&Path>,
@@ -69,7 +68,6 @@ fn dictionary_form(name: &str) -> bool {
         && chars.next().is_some_and(is_syllable)
         && !name.ends_with("하다")
         && !name.ends_with("되다")
-        && !name.ends_with("이다")
 }
 
 fn imported_stems(
@@ -100,7 +98,11 @@ pub fn resolve_module(name: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
     let wanted = crate::hangul::to_nfc(&format!("{name}.sr"));
     let found = base_dir
         .and_then(|folder| find_in(folder, &wanted))
-        .or_else(|| std_dirs().iter().find_map(|folder| find_in(folder, &wanted)))?;
+        .or_else(|| {
+            std_dirs()
+                .iter()
+                .find_map(|folder| find_in(folder, &wanted))
+        })?;
     Some(found.canonicalize().unwrap_or(found))
 }
 
@@ -109,7 +111,10 @@ fn std_dirs() -> Vec<PathBuf> {
     if let Some(given) = std::env::var_os("SAEROM_STD") {
         found.push(PathBuf::from(given));
     }
-    if let Some(here) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+    if let Some(here) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
         found.push(here.join("../lib/saerom/std"));
     }
     // 저장소에서 바로 돌릴 때
@@ -207,12 +212,11 @@ fn gather(
 
 fn shadowed(vocab: &Vocabulary, tokens: &[Token]) -> Result<()> {
     for token in tokens {
-        let Tok::Name(name) = &token.tok else { continue };
+        let Tok::Name(name) = &token.tok else {
+            continue;
+        };
         if let Some(verb) = vocab.verb_named(name) {
-            return Err(Diag::name(
-                msg::name_shadows_verb(name, verb),
-                token.span,
-            ));
+            return Err(Diag::name(msg::name_shadows_verb(name, verb), token.span));
         }
     }
     Ok(())

@@ -160,4 +160,3 @@ pub fn char_at(text: &str, index: usize) -> Option<&str> {
 fn next_char(text: &str) -> &str {
     text.graphemes(true).next().unwrap_or("")
 }
-

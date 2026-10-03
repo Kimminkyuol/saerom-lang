@@ -157,7 +157,11 @@ pub fn irregular(stem: &str, ending: Ending) -> Option<String> {
         ('ㄷ', Ending::AdnominalPast) => format!("{head}{}은", add_coda(bare, 'ㄹ')),
         ('ㄷ', Ending::Conditional) => format!("{head}{}으면", add_coda(bare, 'ㄹ')),
         ('ㄷ', Ending::Auxiliary) => {
-            format!("{head}{}{}", add_coda(bare, 'ㄹ'), if bright { "아" } else { "어" })
+            format!(
+                "{head}{}{}",
+                add_coda(bare, 'ㄹ'),
+                if bright { "아" } else { "어" }
+            )
         }
         // 돕 → 도운 / 도우면 / 도와
         ('ㅂ', Ending::AdnominalPast) => {
@@ -257,4 +261,3 @@ impl Pos {
         }
     }
 }
-

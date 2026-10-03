@@ -316,7 +316,8 @@ impl Lexer<'_> {
 
 // 값 앞의 `-`. 숫자 앞은 리터럴로 이미 먹었다.
 fn negates(chars: &[char], at: usize) -> bool {
-    chars[at] == '-' && matches!(chars.get(at + 1), Some(&c) if c == '(' || c == '"' || is_word_char(c))
+    chars[at] == '-'
+        && matches!(chars.get(at + 1), Some(&c) if c == '(' || c == '"' || is_word_char(c))
 }
 
 fn is_word_char(ch: char) -> bool {

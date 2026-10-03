@@ -1,8 +1,8 @@
 //! 실행 중 오류: 자리 표시, 되짚기, 멈춤, 스택 가드.
 
+use crate::io::flush_out;
 use crate::msg;
 use crate::report::{self, Report};
-use crate::io::flush_out;
 use crate::value::name_of;
 
 #[repr(C)]
@@ -164,4 +164,3 @@ pub fn fail(kind: &str, message: String) -> ! {
     eprint!("\n{}", trace());
     std::process::exit(1);
 }
-

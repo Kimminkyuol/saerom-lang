@@ -40,7 +40,6 @@ pub extern "C" fn sr_gc_point() {
     collect(roots);
 }
 
-
 // 힙에 올린 것마다 붙는 머리. 수집기가 이 사슬을 따라 훑는다.
 #[repr(C)]
 pub struct Head {

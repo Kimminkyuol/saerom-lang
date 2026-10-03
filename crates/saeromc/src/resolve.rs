@@ -159,7 +159,6 @@ fn spot_of(name: &str) -> Option<&str> {
     name.strip_suffix("번째").filter(|head| !head.is_empty())
 }
 
-
 // 이름과 조사 다발로 동사를 찾는다. 뒤에 정의한 것이 이긴다.
 fn pick_verb(verbs: &[Verb], name: &str, used: &[Marker]) -> Option<(FuncId, Vec<Marker>)> {
     verbs
@@ -179,7 +178,6 @@ fn order_args(mut args: Vec<(Marker, Expr)>, params: &[Marker]) -> Vec<Expr> {
     }
     out
 }
-
 
 impl<'a> Resolver<'a> {
     fn note(&mut self, unit: UnitId, mut error: Diag) {
@@ -327,11 +325,11 @@ impl<'a> Resolver<'a> {
                     // `철수의 스물을 알린다`는 파서가 `철수의 스물`을 필드로 먼저
                     // 먹어 호출이 성립하지 않는다. 인자가 리터럴일 때만 우연히
                     // 되던 자리라 아예 막는다.
-                    if params.iter().any(|(marker, _)| *marker == Marker::Case("의")) {
-                        self.note(
-                            unit,
-                            Diag::syntax(msg::GENITIVE_PARAM.to_string(), *span)
-                        );
+                    if params
+                        .iter()
+                        .any(|(marker, _)| *marker == Marker::Case("의"))
+                    {
+                        self.note(unit, Diag::syntax(msg::GENITIVE_PARAM.to_string(), *span));
                         continue;
                     }
                     let func = self.functions.len() as FuncId;
@@ -357,13 +355,12 @@ impl<'a> Resolver<'a> {
                             },
                         );
                     }
-                    let params: Vec<Marker> = params.iter().map(|(marker, _)| *marker).collect();
+                    let params: Vec<Marker> =
+                        params.iter().map(|(marker, _)| *marker).collect();
                     // 같은 이름·같은 조사면 호출 때 나중 것이 조용히 이긴다.
-                    if self.tables[unit]
-                        .verbs
-                        .iter()
-                        .any(|found| found.name == *name && crate::sig::same(&found.params, &params))
-                    {
+                    if self.tables[unit].verbs.iter().any(|found| {
+                        found.name == *name && crate::sig::same(&found.params, &params)
+                    }) {
                         self.note(unit, Diag::name(msg::already_defined(name), *span));
                     }
                     self.tables[unit].verbs.push(Verb {
@@ -611,8 +608,7 @@ impl<'a> Resolver<'a> {
                 let mut calls = Vec::new();
                 calls_in_block(body, &mut calls);
                 for call in calls {
-                    let used: Vec<Marker> =
-                        call.slots.iter().map(|slot| slot.marker).collect();
+                    let used: Vec<Marker> = call.slots.iter().map(|slot| slot.marker).collect();
                     let Some((target, _)) =
                         pick_verb(&self.tables[unit].verbs, &call.verb, &used)
                     else {
@@ -632,7 +628,9 @@ impl<'a> Resolver<'a> {
                         else {
                             continue;
                         };
-                        let Some(given) = slot.expr.as_name() else { continue };
+                        let Some(given) = slot.expr.as_name() else {
+                            continue;
+                        };
                         if !params.iter().any(|(_, name)| name == given) {
                             continue;
                         }
@@ -698,7 +696,8 @@ impl<'a> Resolver<'a> {
                     frame.place(&name, &mut self.tables[unit], &mut self.globals);
                 }
             }
-            let taken: std::collections::HashSet<String> = frame.locals.keys().cloned().collect();
+            let taken: std::collections::HashSet<String> =
+                frame.locals.keys().cloned().collect();
             let given: std::collections::HashSet<String> = match statement {
                 ASt::Define { params, .. } => params
                     .iter()
@@ -1080,6 +1079,9 @@ impl<'a> Resolver<'a> {
         if !namespaced && call.verb == "제거하다" {
             return self.lower_remove(frame, call, &slots);
         }
+        if !namespaced && call.verb == "삽입하다" {
+            return self.lower_insert(frame, call, &slots);
+        }
         if call.verb == "이다" {
             if let Some(found) = self.lower_predicate(frame, call, &slots, home) {
                 return found;
@@ -1099,6 +1101,48 @@ impl<'a> Resolver<'a> {
             args.push((slot.marker, value));
         }
         self.finish_call(frame, &call.verb, args, home, namespaced, call, &bound)
+    }
+
+    // `<묶음>의 <n>번째에 <값>을 삽입한다`
+    fn lower_insert(
+        &mut self,
+        frame: &mut Frame,
+        call: &'a ast::CallExpr,
+        slots: &[&'a ast::Slot],
+    ) -> Expr {
+        let slot = |marker| {
+            slots
+                .iter()
+                .find(|slot| slot.marker == marker)
+                .map(|slot| &slot.expr)
+        };
+        let (Some(target), Some(value)) = (slot(Marker::Case("에")), slot(Marker::Case("를")))
+        else {
+            self.note(frame.unit, Diag::syntax(msg::INSERT_NEEDS_SPOT, call.span));
+            return Expr::Nothing;
+        };
+        let spot = match target {
+            ast::Expr::Spot { owner, place, .. } => {
+                Some((self.lower_expr(frame, owner), self.lower_expr(frame, place)))
+            }
+            ast::Expr::Field { owner, name, span } => {
+                match self.lower_field(frame, owner, name, *span) {
+                    Expr::Index { owner, place, .. } => Some((*owner, *place)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((owner, place)) = spot else {
+            self.note(frame.unit, Diag::syntax(msg::INSERT_NEEDS_SPOT, call.span));
+            return Expr::Nothing;
+        };
+        let value = self.lower_expr(frame, value);
+        Expr::Call {
+            callee: Callee::Op(builtins::Builtin::Insert),
+            args: vec![owner, place, value],
+            span: call.span,
+        }
     }
 
     fn lower_remove(
@@ -1267,7 +1311,10 @@ impl<'a> Resolver<'a> {
         }
         if self.special.len() >= MAX_SPECIAL {
             let span = self.functions[func as usize].span;
-            self.note(self.owners[func as usize], Diag::syntax(msg::TOO_MANY_SPECIAL, span));
+            self.note(
+                self.owners[func as usize],
+                Diag::syntax(msg::TOO_MANY_SPECIAL, span),
+            );
             return None;
         }
         let made = self.functions.len() as FuncId;

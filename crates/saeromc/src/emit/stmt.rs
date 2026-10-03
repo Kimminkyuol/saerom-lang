@@ -122,7 +122,11 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    pub(super) fn if_chain(&mut self, branches: &'a [(Expr, Vec<Stmt>)], otherwise: Option<&'a [Stmt]>) {
+    pub(super) fn if_chain(
+        &mut self,
+        branches: &'a [(Expr, Vec<Stmt>)],
+        otherwise: Option<&'a [Stmt]>,
+    ) {
         let end = self.label("endif");
         for (test, body) in branches {
             let value = self.expr(test);

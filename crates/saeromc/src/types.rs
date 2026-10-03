@@ -1,8 +1,8 @@
 use crate::builtins::Builtin;
 use crate::diag::Diag;
-use crate::msg;
 use crate::hir::*;
 use crate::intern::Symbol;
+use crate::msg;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -118,10 +118,14 @@ impl Types {
                 (Ty::Str, _) => Ty::Str,
                 (a, b) => arithmetic(a, b),
             },
-            Builtin::Push | Builtin::RemoveAt | Builtin::RemoveKey => Ty::Nothing,
+            Builtin::Push | Builtin::Insert | Builtin::RemoveAt | Builtin::RemoveKey => {
+                Ty::Nothing
+            }
             Builtin::Sub | Builtin::Mul | Builtin::Rem => arithmetic(arg(0), arg(1)),
             // 나누다는 늘 실수. 몫은 정수끼리면 정수.
             Builtin::Div => Ty::Float,
+            Builtin::Neg if arg(0).number() => arg(0),
+            Builtin::Neg => Ty::Any,
             Builtin::Quot => arithmetic(arg(0), arg(1)),
         }
     }
@@ -132,12 +136,14 @@ impl Types {
             Some(Expr::Global(slot)) => self.constants[*slot as usize].clone(),
             _ => None,
         };
-        let _ = function;
+        // 실패하면 없음이라, 실패할 수 있는 원본이면 Any.
+        let source = args.first().map_or(Ty::Never, |e| self.of(function, e));
+        let sure = matches!(source, Ty::Never | Ty::Int | Ty::Float | Ty::Bool);
         match kind.as_deref() {
-            Some("정수") | Some("수") => Ty::Int,
-            Some("실수") => Ty::Float,
+            Some("정수") | Some("수") if sure => Ty::Int,
+            Some("실수") if sure => Ty::Float,
             Some("문자열") => Ty::Str,
-            Some("논리값") => Ty::Bool,
+            Some("논리값") if !matches!(source, Ty::Str | Ty::Any) => Ty::Bool,
             _ => Ty::Any,
         }
     }
@@ -247,7 +253,6 @@ fn count_sets(body: &[Stmt], counts: &mut [usize], found: &mut [Option<Rc<str>>]
         }
     }
 }
-
 
 fn raise(slot: &mut Ty, found: Ty, moved: &mut bool) {
     let joined = slot.join(found);
@@ -499,7 +504,10 @@ fn check_block(
             Stmt::If { branches, .. } => branches.iter().map(|(test, _)| test).collect(),
             Stmt::Range {
                 start, stop, step, ..
-            } => [Some(start), Some(stop), step.as_ref()].into_iter().flatten().collect(),
+            } => [Some(start), Some(stop), step.as_ref()]
+                .into_iter()
+                .flatten()
+                .collect(),
             Stmt::While { test, .. } => vec![test],
             Stmt::Break | Stmt::Continue => Vec::new(),
         };
@@ -520,9 +528,10 @@ fn check_expr(
     found: &mut Vec<Diag>,
 ) {
     let inner: Vec<&Expr> = match expr {
-        Expr::Table(items, entries) => {
-            items.iter().chain(entries.iter().map(|(_, value)| value)).collect()
-        }
+        Expr::Table(items, entries) => items
+            .iter()
+            .chain(entries.iter().map(|(_, value)| value))
+            .collect(),
         Expr::Template(items) => items.iter().collect(),
         Expr::Field { owner, .. } => vec![owner],
         Expr::Index { owner, place, .. } => vec![owner, place],
@@ -543,13 +552,47 @@ fn check_expr(
     else {
         return;
     };
+    let push = |found: &mut Vec<Diag>, text: String| {
+        let mut error = Diag::new(msg::VALUE, text, *span);
+        error.unit = Some(unit);
+        found.push(error);
+    };
+    let known = |ty: Ty| !matches!(ty, Ty::Any | Ty::Never);
+    if let (Builtin::Greater | Builtin::Less, [left, right]) = (op, args.as_slice()) {
+        let tys = [types.of(function, left), types.of(function, right)];
+        let fits = (tys[0].number() && tys[1].number()) || tys == [Ty::Str, Ty::Str];
+        if known(tys[0]) && known(tys[1]) && !fits {
+            let verb = if *op == Builtin::Greater {
+                "크다"
+            } else {
+                "작다"
+            };
+            let side = |expr: &Expr, ty: Ty| format!("{} {}", kind_of(ty), shown_of(expr, ty));
+            let text = msg::cannot_order(
+                verb,
+                side(left, tys[0]).trim_end(),
+                side(right, tys[1]).trim_end(),
+            );
+            push(found, text);
+        }
+        return;
+    }
     let verb = match op {
         Builtin::Add => "더하다",
         Builtin::Sub => "빼다",
         Builtin::Mul => "곱하다",
         Builtin::Div | Builtin::Quot | Builtin::Rem => "나누다",
+        Builtin::Neg => "-",
         _ => return,
     };
+    let odd = |ty: &Ty| !ty.number() && known(*ty);
+    if let [value] = args.as_slice() {
+        let ty = types.of(function, value);
+        if odd(&ty) {
+            push(found, describe(verb, value, ty));
+        }
+        return;
+    }
     let [left, right] = args.as_slice() else {
         return;
     };
@@ -558,29 +601,39 @@ fn check_expr(
     if *op == Builtin::Add && matches!(tys[0], Ty::Str | Ty::Any) {
         return;
     }
-    let odd = |ty: &Ty| !ty.number() && !matches!(ty, Ty::Any | Ty::Never);
     let Some(at) = tys.iter().position(odd) else {
         return;
     };
-    let mut error = Diag::new(msg::VALUE, describe(verb, &args[at], tys[at]), *span);
-    error.unit = Some(unit);
-    found.push(error);
+    push(found, describe(verb, &args[at], tys[at]));
 }
 
 // 실행 시 메시지와 같은 꼴. 값을 알면 값도 보인다.
 fn describe(verb: &str, expr: &Expr, ty: Ty) -> String {
-    let kind = match ty {
+    let kind = kind_of(ty);
+    let shown = shown_of(expr, ty);
+    match (verb, shown.as_str()) {
+        ("-", _) => msg::negate_not_number(kind, &shown),
+        (_, "") => msg::arg_not_number_kind(verb, kind),
+        _ => msg::arg_not_number(verb, kind, &shown),
+    }
+}
+
+fn kind_of(ty: Ty) -> &'static str {
+    match ty {
+        Ty::Int | Ty::Float => "수",
         Ty::Bool => "논리값",
         Ty::Str => "문자열",
         Ty::Table => "묶음",
         _ => "값",
-    };
+    }
+}
+
+fn shown_of(expr: &Expr, ty: Ty) -> String {
     match expr {
-        Expr::Str(text) => msg::arg_not_number(verb, kind, &format!("\"{text}\"")),
-        Expr::Bool(value) => {
-            msg::arg_not_number(verb, kind, if *value { "참" } else { "거짓" })
-        }
-        _ if ty == Ty::Nothing => msg::arg_not_number(verb, kind, "없음"),
-        _ => msg::arg_not_number_kind(verb, kind),
+        Expr::Str(text) => format!("\"{text}\""),
+        Expr::Bool(value) => (if *value { "참" } else { "거짓" }).to_string(),
+        Expr::Int(value) => value.to_string(),
+        _ if ty == Ty::Nothing => "없음".to_string(),
+        _ => String::new(),
     }
 }

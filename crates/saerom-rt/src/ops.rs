@@ -4,7 +4,6 @@ use crate::value::*;
 use crate::{fault::fail, io::flush_out};
 use std::collections::HashMap;
 
-
 pub type Nouns = Option<
     unsafe extern "C" fn(
         out: *mut Value,
@@ -103,6 +102,29 @@ pub unsafe extern "C" fn sr_remove_at(table: *const Value, place: *const Value) 
         fail(msg::VALUE, msg::out_of_range(index, held.items.len()));
     }
     held.items.remove(index as usize - 1);
+}
+
+// 길이+1번째는 끝에 붙인다.
+#[no_mangle]
+pub unsafe extern "C" fn sr_insert(
+    table: *const Value,
+    place: *const Value,
+    item: *const Value,
+) {
+    let found = at(table);
+    let place = at(place);
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("삽입하다", found.kind()));
+    }
+    if place.tag != INT {
+        fail(msg::VALUE, msg::place_not_int(&to_text(place)));
+    }
+    let index = place.as_int();
+    let held = found.as_table();
+    if index < 1 || index as usize > held.items.len() + 1 {
+        fail(msg::VALUE, msg::out_of_range(index, held.items.len()));
+    }
+    held.items.insert(index as usize - 1, *at(item));
 }
 
 #[no_mangle]
@@ -359,6 +381,22 @@ pub unsafe extern "C" fn sr_add(out: *mut Value, left: *const Value, right: *con
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn sr_neg(out: *mut Value, found: *const Value) {
+    let found = at(found);
+    *out = match found.tag {
+        INT => match found.as_int().checked_neg() {
+            Some(made) => Value::int(made),
+            None => fail(msg::ARITH, msg::overflow("-")),
+        },
+        FLOAT => Value::float(-found.as_float()),
+        _ => fail(
+            msg::VALUE,
+            msg::negate_not_number(found.kind(), &show(found)),
+        ),
+    };
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sr_sub(out: *mut Value, left: *const Value, right: *const Value) {
     arith(
         "빼다",
@@ -503,7 +541,8 @@ pub unsafe extern "C" fn sr_not(out: *mut Value, found: *const Value) {
 pub unsafe extern "C" fn sr_convert(out: *mut Value, found: *const Value, kind: *const Value) {
     let found = at(found);
     let kind = to_text(at(kind));
-    let refuse = || -> Value { fail(msg::VALUE, msg::cannot_convert(&kind, &show(found))) };
+    // 바꿀 수 없으면 없음
+    let refuse = Value::nothing;
     *out = match kind.as_str() {
         "정수" | "수" => match found.tag {
             INT => *found,
@@ -669,4 +708,3 @@ pub extern "C" fn sr_finish() {
 pub unsafe extern "C" fn sr_clone(out: *mut Value, found: *const Value) {
     *out = deep_copy(at(found));
 }
-

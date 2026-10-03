@@ -74,6 +74,7 @@ pub const NO_BLOCK: &str = "구문 블록의 들여쓰기 누락";
 pub const NOT_NEGATION: &str = "'-지'에 대응하는 '않다' 누락";
 pub const DECL_NOT_ONE: &str = "선언문에 지정된 표현식이 단일 값이 아님";
 pub const REMOVE_NEEDS_FIELD: &str = "'제거하다'의 대상이 자리나 명칭이 아님";
+pub const INSERT_NEEDS_SPOT: &str = "'삽입하다'의 대상이 자리가 아님";
 pub const TABLE_ITEM: &str = "`<값>의 묶음` 형식 준수 필요";
 pub const TABLE_NO_END: &str = "묶음 항목이 '묶음'으로 끝나지 않음";
 pub const DECL_NO_COPULA: &str = "선언문에서 '이다' 누락";
@@ -228,7 +229,7 @@ pub fn module_not_taken(module: &str) -> String {
 }
 
 pub fn wrong_particles(verb: &str, used: &str) -> String {
-    format!("'{verb}'를 조사 {used}로 호출할 수 없음")
+    format!("'{verb}'는 조사 [{used}]으로 호출할 수 없음")
 }
 
 pub fn similar(close: &str) -> String {
@@ -276,6 +277,13 @@ pub fn arg_not_number_kind(verb: &str, kind: &str) -> String {
     format!("'{verb}'의 인자가 수가 아님: {kind}")
 }
 
+// shown 은 컴파일 시점에 비어 있을 수 있다.
+pub fn negate_not_number(kind: &str, shown: &str) -> String {
+    format!("'-'의 대상이 수가 아님: {kind} {shown}")
+        .trim_end()
+        .to_string()
+}
+
 pub fn not_table(verb: &str, kind: &str) -> String {
     format!("'{verb}'의 대상이 묶음이 아님: {kind}")
 }
@@ -306,10 +314,6 @@ pub fn out_of_range(index: i64, size: usize) -> String {
 
 pub fn cannot_order(verb: &str, left: &str, right: &str) -> String {
     format!("'{verb}'로 비교할 수 없음: {left}, {right}")
-}
-
-pub fn cannot_convert(kind: &str, shown: &str) -> String {
-    format!("{kind}로 바꿀 수 없음: {shown}")
 }
 
 pub fn unknown_kind(kind: &str) -> String {

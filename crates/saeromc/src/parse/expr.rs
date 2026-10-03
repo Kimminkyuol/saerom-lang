@@ -187,7 +187,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(super) fn split_slots(&mut self, verb: &str, slots: Vec<Slot>) -> (Vec<Slot>, Vec<Slot>) {
+    pub(super) fn split_slots(
+        &mut self,
+        verb: &str,
+        slots: Vec<Slot>,
+    ) -> (Vec<Slot>, Vec<Slot>) {
         let ways = self.program.signatures.ways(verb);
         let (structural, arguments): (Vec<Slot>, Vec<Slot>) = slots
             .into_iter()
@@ -225,7 +229,11 @@ impl<'a> Parser<'a> {
         (arguments[..total - count].to_vec(), taken)
     }
 
-    pub(super) fn reduce(&mut self, slots: Vec<Slot>, info: VerbInfo) -> Result<(Expr, Vec<Slot>)> {
+    pub(super) fn reduce(
+        &mut self,
+        slots: Vec<Slot>,
+        info: VerbInfo,
+    ) -> Result<(Expr, Vec<Slot>)> {
         let (kept, slots) = if info.name == "이다" || info.pos == Pos::Passive {
             (Vec::new(), slots)
         } else {
@@ -377,20 +385,11 @@ impl<'a> Parser<'a> {
                         span,
                     },
                     value => Expr::Call(Box::new(CallExpr {
-                        verb: "빼다".into(),
-                        slots: vec![
-                            Slot {
-                                marker: Marker::Case("에서"),
-                                expr: Expr::Literal {
-                                    value: Literal::Int(0),
-                                    span,
-                                },
-                            },
-                            Slot {
-                                marker: Marker::Case("를"),
-                                expr: value,
-                            },
-                        ],
+                        verb: "-".into(),
+                        slots: vec![Slot {
+                            marker: Marker::Bare,
+                            expr: value,
+                        }],
                         negated: false,
                         asks: false,
                         tail: Some("값".into()),
@@ -406,11 +405,10 @@ impl<'a> Parser<'a> {
             }
             // 조사와 동음인 낱말(가·는·의·로…)은 이름이 될 수 없다. 그냥 "값이 아님"
             // 으로 흘리면 원인을 알 수 없어 따로 짚는다.
-            Tok::Particle { .. } => Err(Diag::syntax(
-                msg::not_a_value(&describe(&token.tok)),
-                span,
-            )
-            .with_hint(msg::NAME_IS_PARTICLE)),
+            Tok::Particle { .. } => {
+                Err(Diag::syntax(msg::not_a_value(&describe(&token.tok)), span)
+                    .with_hint(msg::NAME_IS_PARTICLE))
+            }
             other => Err(Diag::syntax(msg::not_a_value(&describe(other)), span)),
         }
     }

@@ -184,7 +184,6 @@ impl Value {
     }
 }
 
-
 pub fn equal(left: &Value, right: &Value) -> bool {
     equal_in(left, right, &mut Vec::new())
 }
@@ -213,7 +212,10 @@ fn equal_in(left: &Value, right: &Value, open: &mut Vec<(u64, u64)>) -> bool {
             let (a, b) = (left.as_table(), right.as_table());
             let same = a.items.len() == b.items.len()
                 && a.keys.len() == b.keys.len()
-                && a.items.iter().zip(b.items.iter()).all(|(x, y)| equal_in(x, y, open))
+                && a.items
+                    .iter()
+                    .zip(b.items.iter())
+                    .all(|(x, y)| equal_in(x, y, open))
                 && a.keys.iter().all(|(key, value)| {
                     b.get(key).is_some_and(|kept| equal_in(value, &kept, open))
                 });

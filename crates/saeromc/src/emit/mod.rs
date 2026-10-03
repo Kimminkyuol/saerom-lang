@@ -137,6 +137,11 @@ fn operation(op: Builtin) -> Op {
             arity: 2,
             returns: false,
         },
+        Builtin::Insert => Op {
+            symbol: "sr_insert",
+            arity: 3,
+            returns: false,
+        },
         Builtin::RemoveAt => Op {
             symbol: "sr_remove_at",
             arity: 2,
@@ -148,6 +153,7 @@ fn operation(op: Builtin) -> Op {
             returns: false,
         },
         Builtin::Sub => value("sr_sub", 2),
+        Builtin::Neg => value("sr_neg", 1),
         Builtin::Mul => value("sr_mul", 2),
         Builtin::Div => value("sr_div", 2),
         Builtin::Rem => value("sr_rem", 2),
@@ -180,6 +186,7 @@ declare void @sr_table_get(ptr, ptr, i64)
 declare void @sr_table_put(ptr, ptr, i64, ptr)
 declare void @sr_push(ptr, ptr)
 declare void @sr_remove_at(ptr, ptr)
+declare void @sr_insert(ptr, ptr, ptr)
 declare void @sr_remove_key(ptr, ptr)
 declare void @sr_template(ptr, ptr, i64)
 declare void @sr_field_get(ptr, ptr, ptr, i64, ptr)
@@ -194,6 +201,7 @@ declare void @sr_print_parts(ptr, i64)
 declare void @sr_add(ptr, ptr, ptr)
 declare void @sr_append(ptr, ptr)
 declare void @sr_sub(ptr, ptr, ptr)
+declare void @sr_neg(ptr, ptr)
 declare void @sr_mul(ptr, ptr, ptr)
 declare void @sr_div(ptr, ptr, ptr)
 declare void @sr_rem(ptr, ptr, ptr)
@@ -690,7 +698,10 @@ impl<'a> Emitter<'a> {
             }
         }
         if ret == Repr::Boxed {
-            let _ = writeln!(prologue, "  store %Value zeroinitializer, ptr %out, align 8");
+            let _ = writeln!(
+                prologue,
+                "  store %Value zeroinitializer, ptr %out, align 8"
+            );
         }
         // 잎 함수는 자기를 다시 못 부르니 검사도 필요 없다.
         if calls_user(&function.body) {
@@ -866,6 +877,3 @@ fn calls_user(body: &[Stmt]) -> bool {
     }
     body.iter().any(in_stmt)
 }
-
-
-

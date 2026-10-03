@@ -93,7 +93,7 @@ fn makes_fresh(expr: &Expr) -> bool {
 }
 
 fn holds_value(op: Builtin) -> bool {
-    matches!(op, Builtin::Clone | Builtin::Push)
+    matches!(op, Builtin::Clone | Builtin::Push | Builtin::Insert)
 }
 
 impl Scan {

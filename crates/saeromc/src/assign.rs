@@ -156,8 +156,7 @@ impl Check<'_> {
         if !self.seen.insert(name.to_string()) {
             return;
         }
-        self.errors
-            .push(Diag::name(msg::not_assigned(name), span));
+        self.errors.push(Diag::name(msg::not_assigned(name), span));
     }
 
     fn expr(&mut self, expr: &Expr, live: &mut Live) {

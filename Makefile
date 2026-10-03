@@ -5,7 +5,9 @@ PREFIX ?= $(HOME)/.local
 all:
 	cargo build
 
+# 테스트가 런타임 .a 를 링크하므로 먼저 빌드
 test:
+	cargo build
 	cargo test
 
 fmt:

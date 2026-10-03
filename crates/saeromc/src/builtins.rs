@@ -8,6 +8,7 @@ pub enum Builtin {
     Convert,
     Add,
     Push,
+    Insert,
     RemoveAt,
     RemoveKey,
     Sub,
@@ -24,6 +25,7 @@ pub enum Builtin {
     Open,
     Write,
     Nothing,
+    Neg,
 }
 
 pub struct Def {
@@ -51,6 +53,7 @@ pub fn table() -> &'static [Def] {
         vec![
             one("출력하다", "를", Builtin::Print),
             two("추가하다", "에", "를", Builtin::Push),
+            two("삽입하다", "에", "를", Builtin::Insert),
             one("종료하다", "로", Builtin::Stop),
             one("복사하다", "를", Builtin::Clone),
             two("바꾸다", "를", "로", Builtin::Convert),
@@ -68,6 +71,12 @@ pub fn table() -> &'static [Def] {
             one("닫다", "를", Builtin::Close),
             two("쓰다", "에", "를", Builtin::Write),
             one("가져오다", "를", Builtin::Nothing),
+            // 단항 `-`. 사용자가 쓸 수 없는 이름이다.
+            Def {
+                verb: "-",
+                params: leak(vec![Marker::Bare]),
+                op: Builtin::Neg,
+            },
             Def {
                 verb: "이다",
                 params: leak(vec![CASE("가"), Marker::Bare]),
@@ -90,7 +99,6 @@ pub fn table() -> &'static [Def] {
 fn leak(markers: Vec<Marker>) -> &'static [Marker] {
     Vec::leak(markers)
 }
-
 
 pub fn find(verb: &str, used: &[Marker]) -> Option<&'static Def> {
     table().iter().find(|def| {
