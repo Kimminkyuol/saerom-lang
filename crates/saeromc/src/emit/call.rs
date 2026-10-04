@@ -6,16 +6,12 @@ impl<'a> Emitter<'a> {
     // i64 산술은 조용히 감기지 않는다. 넘치면 그 자리에서 멈춘다.
     pub(super) fn overflowed(
         &mut self,
-        whole_op: &str,
+        intrinsic: &str,
+        verb: &str,
         a: &str,
         b: &str,
         span: Span,
     ) -> String {
-        let (intrinsic, verb) = match whole_op {
-            "add" => ("sadd", "더하다"),
-            "sub" => ("ssub", "빼다"),
-            _ => ("smul", "곱하다"),
-        };
         let pair = self.temp();
         self.line(&format!(
             "{pair} = call {{i64, i1}} @llvm.{intrinsic}.with.overflow.i64(i64 {a}, i64 {b})"
@@ -36,12 +32,65 @@ impl<'a> Emitter<'a> {
         out
     }
 
+    fn nonzero(&mut self, divisor: &str, span: Span) {
+        let zero = self.temp();
+        self.line(&format!("{zero} = fcmp oeq double {divisor}, 0.0"));
+        let trap = self.label("divzero");
+        let ok = self.label("divok");
+        self.line(&format!("br i1 {zero}, label %{trap}, label %{ok}"));
+        self.mark(&trap);
+        self.at(span);
+        self.line("call void @sr_div_zero()");
+        self.line(&format!("br label %{ok}"));
+        self.mark(&ok);
+    }
+
+    fn finite(&mut self, made: &str, verb: &str, span: Span) {
+        let size = self.temp();
+        self.line(&format!(
+            "{size} = call double @llvm.fabs.f64(double {made})"
+        ));
+        let over = self.temp();
+        self.line(&format!(
+            "{over} = fcmp oeq double {size}, 0x7FF0000000000000"
+        ));
+        let trap = self.label("overflow");
+        let ok = self.label("inbounds");
+        self.line(&format!("br i1 {over}, label %{trap}, label %{ok}"));
+        self.mark(&trap);
+        self.at(span);
+        let (name, len) = self.constant(verb);
+        self.line(&format!("call void @sr_overflow(ptr {name}, i64 {len})"));
+        self.line(&format!("br label %{ok}"));
+        self.mark(&ok);
+    }
+
+    fn negated(&mut self, value: &'a Expr, span: Span) -> Option<Val> {
+        let (repr, name) = match self.type_of(value) {
+            Ty::Int => {
+                let found = self.value(value, Repr::Word);
+                (Repr::Word, self.overflowed("ssub", "-", "0", &found, span))
+            }
+            Ty::Float => {
+                let found = self.value(value, Repr::Real);
+                let out = self.temp();
+                self.line(&format!("{out} = fneg double {found}"));
+                (Repr::Real, out)
+            }
+            _ => return None,
+        };
+        Some(Val { repr, name })
+    }
+
     pub(super) fn inline_op(
         &mut self,
         op: Builtin,
         args: &'a [Expr],
         span: Span,
     ) -> Option<Val> {
+        if let (Builtin::Neg, [value]) = (op, args) {
+            return self.negated(value, span);
+        }
         if args.len() != 2 {
             if op == Builtin::Truthy && args.len() == 1 && self.type_of(&args[0]) == Ty::Bool {
                 return Some(self.expr(&args[0]));
@@ -70,18 +119,37 @@ impl<'a> Emitter<'a> {
                 name: out,
             });
         }
-        let arith = |name: &'static str, floating: &'static str| Some((name, floating));
+        // 나누다는 늘 실수, 몫은 정수끼리가 아니면 내림한 실수.
+        if matches!(op, Builtin::Div | Builtin::Quot) && (whole || real) {
+            let a = self.value(&args[0], Repr::Real);
+            let b = self.value(&args[1], Repr::Real);
+            self.nonzero(&b, span);
+            let mut out = self.temp();
+            self.line(&format!("{out} = fdiv double {a}, {b}"));
+            self.finite(&out, "나누다", span);
+            if op == Builtin::Quot {
+                let floor = self.temp();
+                self.line(&format!(
+                    "{floor} = call double @llvm.floor.f64(double {out})"
+                ));
+                out = floor;
+            }
+            return Some(Val {
+                repr: Repr::Real,
+                name: out,
+            });
+        }
         let found = match op {
-            Builtin::Add => arith("add", "fadd"),
-            Builtin::Sub => arith("sub", "fsub"),
-            Builtin::Mul => arith("mul", "fmul"),
+            Builtin::Add => Some(("sadd", "더하다", "fadd")),
+            Builtin::Sub => Some(("ssub", "빼다", "fsub")),
+            Builtin::Mul => Some(("smul", "곱하다", "fmul")),
             _ => None,
         };
-        if let Some((whole_op, real_op)) = found {
+        if let Some((intrinsic, verb, real_op)) = found {
             if whole {
                 let a = self.value(&args[0], Repr::Word);
                 let b = self.value(&args[1], Repr::Word);
-                let out = self.overflowed(whole_op, &a, &b, span);
+                let out = self.overflowed(intrinsic, verb, &a, &b, span);
                 return Some(Val {
                     repr: Repr::Word,
                     name: out,
@@ -92,6 +160,7 @@ impl<'a> Emitter<'a> {
                 let b = self.value(&args[1], Repr::Real);
                 let out = self.temp();
                 self.line(&format!("{out} = {real_op} double {a}, {b}"));
+                self.finite(&out, verb, span);
                 return Some(Val {
                     repr: Repr::Real,
                     name: out,
@@ -116,6 +185,33 @@ impl<'a> Emitter<'a> {
                 compare.0,
                 want.llvm()
             ));
+            return Some(Val {
+                repr: Repr::Flag,
+                name: out,
+            });
+        }
+        // 정수와 실수는 값 그대로 견준다. 정수를 실수로 바꾸면 2^53 위에서 뭉개진다.
+        if real && (left == Ty::Int || right == Ty::Int) {
+            let flip = right == Ty::Int;
+            let reprs = if flip {
+                [Repr::Real, Repr::Word]
+            } else {
+                [Repr::Word, Repr::Real]
+            };
+            let a = self.value(&args[0], reprs[0]);
+            let b = self.value(&args[1], reprs[1]);
+            let (whole, other) = if flip { (b, a) } else { (a, b) };
+            let order = self.temp();
+            self.line(&format!(
+                "{order} = call i32 @sr_order_int_real(i64 {whole}, double {other})"
+            ));
+            let test = match (op, flip) {
+                (Builtin::Equal, _) => "eq",
+                (Builtin::Greater, false) | (Builtin::Less, true) => "sgt",
+                _ => "slt",
+            };
+            let out = self.temp();
+            self.line(&format!("{out} = icmp {test} i32 {order}, 0"));
             return Some(Val {
                 repr: Repr::Flag,
                 name: out,
@@ -157,8 +253,7 @@ impl<'a> Emitter<'a> {
             "call void @sr_print_parts(ptr {array}, i64 {})",
             parts.len()
         ));
-        let out = self.slot();
-        self.clear_value(&out);
+        let out = self.nothing();
         Some(Val {
             repr: Repr::Boxed,
             name: out,
@@ -171,6 +266,9 @@ impl<'a> Emitter<'a> {
                 return found;
             }
         }
+        if op == Builtin::SortBy {
+            return self.sort_by(args, span);
+        }
         let mut given = Vec::with_capacity(args.len());
         for arg in args {
             let value = self.expr(arg);
@@ -178,9 +276,12 @@ impl<'a> Emitter<'a> {
         }
         self.at(span);
         let found = operation(op);
-        let out = self.slot();
+        let out = if found.returns {
+            self.slot()
+        } else {
+            self.nothing()
+        };
         if found.symbol.is_empty() {
-            self.clear_value(&out);
             return Val {
                 repr: Repr::Boxed,
                 name: out,
@@ -193,8 +294,6 @@ impl<'a> Emitter<'a> {
             .collect();
         if found.returns {
             passed.insert(0, format!("ptr {out}"));
-        } else {
-            self.clear_value(&out);
         }
         self.line(&format!(
             "call void @{}({})",
@@ -247,6 +346,7 @@ impl<'a> Emitter<'a> {
         if let Some(depth) = depth {
             self.line(&format!("store i32 {depth}, ptr @SR_DEPTH, align 4"));
         }
+        self.returned();
         self.guard_result(func, &made, span);
         made
     }

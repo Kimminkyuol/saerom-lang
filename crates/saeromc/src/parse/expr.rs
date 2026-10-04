@@ -5,9 +5,9 @@ use super::*;
 impl<'a> Parser<'a> {
     pub(super) fn take_verb(&mut self) -> Result<VerbInfo> {
         let token = self.ahead(0);
-        let (name, pos, ending) = match &token.tok {
-            Tok::Verb { name, pos, ending } => (name.clone(), *pos, *ending),
-            Tok::Copula { ending } => ("이다".to_string(), Pos::Descriptive, *ending),
+        let (name, ending) = match &token.tok {
+            Tok::Verb { name, ending, .. } => (name.clone(), *ending),
+            Tok::Copula { ending } => ("이다".to_string(), *ending),
             other => return Err(Diag::syntax(msg::not_a_verb(&describe(other)), token.span)),
         };
         self.at += 1;
@@ -15,7 +15,6 @@ impl<'a> Parser<'a> {
             let span = token.span;
             return Ok(VerbInfo {
                 name: "이다".into(),
-                pos: Pos::Descriptive,
                 ending,
                 negated: true,
                 span,
@@ -38,7 +37,6 @@ impl<'a> Parser<'a> {
             self.at += 1;
             return Ok(VerbInfo {
                 name,
-                pos,
                 ending: after,
                 negated: true,
                 span: token.span,
@@ -46,7 +44,6 @@ impl<'a> Parser<'a> {
         }
         Ok(VerbInfo {
             name,
-            pos,
             ending,
             negated: false,
             span: token.span,
@@ -172,8 +169,15 @@ impl<'a> Parser<'a> {
 
     // 문장 끝 용언은 남은 자리를 다 가져간다. 조사가 안 맞으면 앞에서 잘못
     // 묶은 것이므로 되짚기에게 알린다.
+    fn ways(&self, verb: &str) -> &'a [crate::sig::Signature] {
+        if self.verb_params.iter().any(|name| name == verb) {
+            return &[];
+        }
+        self.program.signatures.ways(verb)
+    }
+
     pub(super) fn verify(&mut self, verb: &str, slots: &[Slot]) {
-        let ways = self.program.signatures.ways(verb);
+        let ways = self.ways(verb);
         if ways.is_empty() || verb == "이다" {
             return;
         }
@@ -192,10 +196,11 @@ impl<'a> Parser<'a> {
         verb: &str,
         slots: Vec<Slot>,
     ) -> (Vec<Slot>, Vec<Slot>) {
-        let ways = self.program.signatures.ways(verb);
+        let ways = self.ways(verb);
         let (structural, arguments): (Vec<Slot>, Vec<Slot>) = slots
             .into_iter()
-            .partition(|slot| !slot.marker.is_argument());
+            // 모듈 표시만 늘 이 용언 몫. 부터·까지도 꼬리 맞춤으로 가른다.
+            .partition(|slot| slot.marker == Marker::Module);
         let fixed: Vec<Marker> = structural
             .iter()
             .map(|slot| slot.marker)
@@ -234,12 +239,12 @@ impl<'a> Parser<'a> {
         slots: Vec<Slot>,
         info: VerbInfo,
     ) -> Result<(Expr, Vec<Slot>)> {
-        let (kept, slots) = if info.name == "이다" || info.pos == Pos::Passive {
+        let (kept, slots) = if info.name == "이다" {
             (Vec::new(), slots)
         } else {
             self.split_slots(&info.name, slots)
         };
-        let (mut slots, info) = if info.name == "이다" {
+        let (slots, info) = if info.name == "이다" {
             fold_comparison(copula_slots(slots), info)
         } else {
             (slots, info)
@@ -254,35 +259,10 @@ impl<'a> Parser<'a> {
 
         if follows_name && tail.is_none() {
             let (head, span) = self.expect_name()?;
-            if info.pos == Pos::Passive {
-                let head = Expr::Name { name: head, span };
-                let call = PassiveExpr {
-                    verb: info.name,
-                    head,
-                    slots,
-                    span: info.span,
-                };
-                return Ok((Expr::Passive(Box::new(call)), kept));
-            }
             return Err(Diag::syntax(msg::not_head_value(&head), span));
         }
         if tail.is_some() {
             self.at += 1;
-        }
-        if info.pos == Pos::Passive {
-            if let Some(index) = slots
-                .iter()
-                .position(|slot| slot.marker == Marker::Case("를"))
-            {
-                let head = slots.remove(index).expr;
-                let call = PassiveExpr {
-                    verb: info.name,
-                    head,
-                    slots,
-                    span: info.span,
-                };
-                return Ok((Expr::Passive(Box::new(call)), kept));
-            }
         }
         let call = CallExpr {
             verb: info.name,
@@ -403,12 +383,12 @@ impl<'a> Parser<'a> {
                 self.expect(&Tok::Symbol(')'), msg::WANT_CLOSE)?;
                 Ok(value)
             }
-            // 조사와 동음인 낱말(가·는·의·로…)은 이름이 될 수 없다. 그냥 "값이 아님"
-            // 으로 흘리면 원인을 알 수 없어 따로 짚는다.
-            Tok::Particle { .. } => {
-                Err(Diag::syntax(msg::not_a_value(&describe(&token.tok)), span)
-                    .with_hint(msg::NAME_IS_PARTICLE))
+            // 조사와 동음인 낱말(가·는·의·로…)은 이름이 될 수 없다.
+            Tok::Particle { canon, .. } => {
+                Err(Diag::syntax(msg::name_is_particle(canon), span))
             }
+            // 값 자리에서 문장이 끝나면 서술어를 빠뜨린 것이다.
+            Tok::Symbol('.' | ':') => Err(Diag::syntax(msg::NO_PREDICATE, span)),
             other => Err(Diag::syntax(msg::not_a_value(&describe(other)), span)),
         }
     }
@@ -452,6 +432,7 @@ impl<'a> Parser<'a> {
             base_dir: self.base_dir,
             errors: Vec::new(),
             inside: false,
+            verb_params: self.verb_params.clone(),
             plan: Vec::new(),
             picks: Vec::new(),
             stuck: false,

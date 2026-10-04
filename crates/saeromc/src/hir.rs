@@ -129,6 +129,8 @@ pub struct Function {
     pub module: ModuleId,
     pub params: Vec<LocalId>,
     pub locals: u32,
+    // 편집기 설명용 이름표
+    pub names: Vec<(Rc<str>, LocalId)>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -140,6 +142,7 @@ pub struct Module {
     pub source: Rc<str>,
     pub init: Vec<Stmt>,
     pub nouns: HashMap<Symbol, FuncId>,
+    pub globals: Vec<(Rc<str>, GlobalId)>,
 }
 
 pub struct Program {

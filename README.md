@@ -17,7 +17,11 @@ saeromc <파일.sr> [-o <출력>] [-O0] [-g]
 saeromc --check <파일.sr>
 saeromc --dump-types <파일.sr>
 saeromc --emit-llvm <파일.sr>
+saeromc --format <파일.sr>
+saeromc --lsp
 ```
+
+편집기: [editors/vscode](editors/vscode/)
 
 ## 빌드
 

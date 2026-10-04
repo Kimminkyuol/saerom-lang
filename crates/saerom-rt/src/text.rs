@@ -57,38 +57,12 @@ pub fn show(value: &Value) -> String {
     }
 }
 
-fn float_text(found: f64) -> String {
-    if found.is_infinite() {
-        return if found > 0.0 { "무한" } else { "-무한" }.to_string();
-    }
-    if found.is_nan() {
-        return "수가 아님".to_string();
-    }
+// 다시 읽으면 같은 값이 되는 최단 표기. 정숫값은 정수처럼 (`1`과 `1.0`은 같은 값).
+pub fn float_text(found: f64) -> String {
     if found == found.trunc() && found.abs() < 9.2e18 {
         return format!("{}", found as i64);
     }
-    significant(found, 12)
-}
-
-fn significant(found: f64, digits: usize) -> String {
-    let exponent = found.abs().log10().floor() as i32;
-    if exponent < -4 || exponent >= digits as i32 {
-        let shown = format!("{:.*e}", digits - 1, found);
-        let (mantissa, power) = shown.split_once('e').expect("지수");
-        return format!("{}e{power}", trim(mantissa));
-    }
-    let places = (digits as i32 - 1 - exponent).max(0) as usize;
-    trim(&format!("{found:.places$}"))
-}
-
-fn trim(shown: &str) -> String {
-    if !shown.contains('.') {
-        return shown.to_string();
-    }
-    shown
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+    format!("{found:?}")
 }
 
 // 글자(grapheme) 단위 색인 커서. UTF-8 을 그대로 두는 대신 마지막으로 짚은 자리를
@@ -132,6 +106,14 @@ pub fn forget() {
     let held = unsafe { &mut *CURSOR.0.get() };
     held.ptr = std::ptr::null();
     held.bytes = usize::MAX;
+}
+
+// 제자리 잇기로 버퍼가 옮겨지면 옛 주소를 새 글이 받을 수 있다.
+pub fn moved(old: *const u8, now: *const u8) {
+    let held = unsafe { &mut *CURSOR.0.get() };
+    if old != now && held.ptr == old {
+        forget();
+    }
 }
 
 pub fn char_len(text: &str) -> usize {

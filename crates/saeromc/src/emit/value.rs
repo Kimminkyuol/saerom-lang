@@ -179,6 +179,7 @@ impl<'a> Emitter<'a> {
                 self.line(&format!(
                     "call void @sr_pick_get(ptr {out}, ptr {owner}, ptr {key}, {nouns})"
                 ));
+                self.returned();
                 Val {
                     repr: Repr::Boxed,
                     name: out,
@@ -196,14 +197,10 @@ impl<'a> Emitter<'a> {
                 repr: Repr::Flag,
                 name: found.to_string(),
             },
-            Expr::Nothing => {
-                let out = self.slot();
-                self.clear_value(&out);
-                Val {
-                    repr: Repr::Boxed,
-                    name: out,
-                }
-            }
+            Expr::Nothing => Val {
+                repr: Repr::Boxed,
+                name: self.nothing(),
+            },
             Expr::Str(found) => {
                 let out = self.slot();
                 let (name, len) = self.constant(found);
@@ -256,6 +253,28 @@ impl<'a> Emitter<'a> {
                 }
             }
             Expr::Field { owner, field, span } => {
+                if Some(*field) == self.types.fields.length
+                    && matches!(self.type_of(owner), Ty::Table | Ty::Str)
+                {
+                    let owner = self.expr(owner);
+                    let owner = self.boxed(owner);
+                    let name = self.temp();
+                    self.line(&format!("{name} = call i64 @sr_each_len(ptr {owner})"));
+                    return Val {
+                        repr: Repr::Word,
+                        name,
+                    };
+                }
+                if Some(*field) == self.types.fields.root && self.type_of(owner).number() {
+                    let found = self.value(owner, Repr::Real);
+                    self.at(*span);
+                    let name = self.temp();
+                    self.line(&format!("{name} = call double @sr_root(double {found})"));
+                    return Val {
+                        repr: Repr::Real,
+                        name,
+                    };
+                }
                 if let Some(found) = self.direct_noun(owner, *field, *span) {
                     return found;
                 }
@@ -268,6 +287,7 @@ impl<'a> Emitter<'a> {
                 self.line(&format!(
                     "call void @sr_field_get(ptr {out}, ptr {owner}, ptr {name}, i64 {len}, {nouns})"
                 ));
+                self.returned();
                 Val {
                     repr: Repr::Boxed,
                     name: out,
@@ -328,7 +348,7 @@ impl<'a> Emitter<'a> {
             return None;
         }
         let name = self.program.names.name(field);
-        if name == "복사본" || name == "자료형" {
+        if name == "자료형" {
             return None;
         }
         let func = *self.program.modules[self.module as usize]
@@ -365,6 +385,7 @@ impl<'a> Emitter<'a> {
         if let Some(depth) = depth {
             self.line(&format!("store i32 {depth}, ptr @SR_DEPTH, align 4"));
         }
+        self.returned();
         self.guard_result(func, &made, span);
         Some(made)
     }

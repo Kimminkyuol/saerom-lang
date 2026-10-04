@@ -541,7 +541,6 @@ impl<'a> Parser<'a> {
                 self.at += 1;
                 VerbInfo {
                     name: "이다".into(),
-                    pos: Pos::Descriptive,
                     ending: Ending::Conditional,
                     negated: true,
                     span: token.span,
@@ -680,8 +679,14 @@ impl<'a> Parser<'a> {
         }
         self.expect_particle()?;
         if !head.ends_with('다') {
-            if params.len() != 1 || params[0].0 != Marker::Case("의") {
+            if !params
+                .iter()
+                .any(|(marker, _)| *marker == Marker::Case("의"))
+            {
                 return Err(Diag::syntax(msg::noun_needs_owner(&head), span));
+            }
+            if params.len() != 1 {
+                return Err(Diag::syntax(msg::noun_owner_only(&head), span));
             }
             let owner = params[0].1.clone();
             let body = self.definition_body()?;
@@ -692,7 +697,14 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
-        let body = self.definition_body()?;
+        self.verb_params = params
+            .iter()
+            .map(|(_, name)| name.clone())
+            .filter(|name| name.ends_with('다'))
+            .collect();
+        let body = self.definition_body();
+        self.verb_params.clear();
+        let body = body?;
         Ok(Stmt::Define {
             name: head,
             params,
@@ -883,8 +895,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Ending::Conditional => {
-                    return Err(Diag::syntax(msg::EXEC_CONDITIONAL, info.span)
-                        .with_hint(msg::EXEC_CONDITIONAL_HELP))
+                    return Err(Diag::syntax(msg::EXEC_CONDITIONAL, info.span))
                 }
                 other => {
                     return Err(Diag::syntax(

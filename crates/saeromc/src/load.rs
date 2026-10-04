@@ -90,7 +90,7 @@ impl Walk {
         self.units.push(Unit {
             name,
             path,
-            source,
+            source: crate::lex::ready(&source),
             statements: Vec::new(),
         });
         for mut error in parsed.errors {

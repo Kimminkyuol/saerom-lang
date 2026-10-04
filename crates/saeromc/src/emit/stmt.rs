@@ -199,13 +199,11 @@ impl<'a> Emitter<'a> {
                 name: "1".into(),
             }),
         };
-        let list = self.slot();
         self.at(span);
-        self.line(&format!(
-            "call void @sr_range(ptr {list}, ptr {start}, ptr {stop}, ptr {step})"
-        ));
         let count = self.temp();
-        self.line(&format!("{count} = call i64 @sr_table_len(ptr {list})"));
+        self.line(&format!(
+            "{count} = call i64 @sr_range_count(ptr {start}, ptr {stop}, ptr {step})"
+        ));
         let index = self.raw("i64");
         self.line(&format!("store i64 0, ptr {index}, align 8"));
 
@@ -223,7 +221,7 @@ impl<'a> Emitter<'a> {
         self.mark(&inside);
         let item = self.slot();
         self.line(&format!(
-            "call void @sr_table_get(ptr {item}, ptr {list}, i64 {now})"
+            "call void @sr_range_at(ptr {item}, ptr {start}, ptr {stop}, ptr {step}, i64 {now})"
         ));
         self.write_place(
             place,
@@ -261,6 +259,7 @@ impl<'a> Emitter<'a> {
         let head = self.label("for");
         let inside = self.label("body");
         let next = self.label("next");
+        let done = self.label("done");
         let end = self.label("endfor");
         self.line(&format!("br label %{head}"));
         self.mark(&head);
@@ -268,11 +267,19 @@ impl<'a> Emitter<'a> {
         self.line(&format!("{now} = load i64, ptr {index}, align 8"));
         let more = self.temp();
         self.line(&format!("{more} = icmp slt i64 {now}, {count}"));
-        self.line(&format!("br i1 {more}, label %{inside}, label %{end}"));
+        self.line(&format!("br i1 {more}, label %{inside}, label %{done}"));
+        // 마지막 바퀴에서 바뀐 것도 잡는다. 빠져나가기는 여기를 거치지 않는다.
+        self.mark(&done);
+        self.at(span);
+        self.line(&format!(
+            "call void @sr_each_check(ptr {list}, i64 {count})"
+        ));
+        self.line(&format!("br label %{end}"));
         self.mark(&inside);
         let item = self.slot();
+        self.at(span);
         self.line(&format!(
-            "call void @sr_table_get(ptr {item}, ptr {list}, i64 {now})"
+            "call void @sr_each_get(ptr {item}, ptr {list}, i64 {now}, i64 {count})"
         ));
         self.write_place(
             place,
@@ -296,6 +303,71 @@ impl<'a> Emitter<'a> {
         self.line(&format!("store i64 {bumped}, ptr {index}, align 8"));
         self.line(&format!("br label %{head}"));
         self.mark(&end);
+    }
+
+    // 자리마다 기준 값을 모아 그 순서로 정렬한다.
+    pub(super) fn sort_by(&mut self, args: &'a [Expr], span: Span) -> Val {
+        let [over, item, key] = args else {
+            unreachable!("기준 정렬")
+        };
+        let place = match item {
+            Expr::Local(slot) => Place::Local(*slot),
+            Expr::Global(slot) => Place::Global(*slot),
+            _ => unreachable!("숨은 칸"),
+        };
+        let held = self.expr(over);
+        let list = self.boxed(held);
+        self.at(span);
+        let count = self.temp();
+        self.line(&format!("{count} = call i64 @sr_sort_len(ptr {list})"));
+        let keys = self.slot();
+        self.line(&format!("call void @sr_table_new(ptr {keys})"));
+        let index = self.raw("i64");
+        self.line(&format!("store i64 0, ptr {index}, align 8"));
+
+        let head = self.label("sorthead");
+        let inside = self.label("sortbody");
+        let end = self.label("sortend");
+        self.line(&format!("br label %{head}"));
+        self.mark(&head);
+        let now = self.temp();
+        self.line(&format!("{now} = load i64, ptr {index}, align 8"));
+        let more = self.temp();
+        self.line(&format!("{more} = icmp slt i64 {now}, {count}"));
+        self.line(&format!("br i1 {more}, label %{inside}, label %{end}"));
+        self.mark(&inside);
+        let one = self.slot();
+        self.at(span);
+        self.line(&format!(
+            "call void @sr_each_get(ptr {one}, ptr {list}, i64 {now}, i64 {count})"
+        ));
+        self.write_place(
+            place,
+            Val {
+                repr: Repr::Boxed,
+                name: one,
+            },
+        );
+        let found = self.expr(key);
+        let found = self.boxed(found);
+        self.line(&format!(
+            "call void @sr_table_push(ptr {keys}, ptr {found})"
+        ));
+        self.line("call void @sr_gc_point()");
+        let bumped = self.temp();
+        self.line(&format!("{bumped} = add i64 {now}, 1"));
+        self.line(&format!("store i64 {bumped}, ptr {index}, align 8"));
+        self.line(&format!("br label %{head}"));
+        self.mark(&end);
+        self.at(span);
+        let out = self.slot();
+        self.line(&format!(
+            "call void @sr_sort_by(ptr {out}, ptr {list}, ptr {keys})"
+        ));
+        Val {
+            repr: Repr::Boxed,
+            name: out,
+        }
     }
 
     pub(super) fn counted(
@@ -363,8 +435,18 @@ impl<'a> Emitter<'a> {
         self.line("call void @sr_gc_point()");
         let seen = self.temp();
         self.line(&format!("{seen} = load i64, ptr {counter}, align 8"));
+        // 넘치면 이미 끝을 지난 것이다.
+        let pair = self.temp();
+        self.line(&format!(
+            "{pair} = call {{i64, i1}} @llvm.sadd.with.overflow.i64(i64 {seen}, i64 {delta})"
+        ));
         let bumped = self.temp();
-        self.line(&format!("{bumped} = add i64 {seen}, {delta}"));
+        self.line(&format!("{bumped} = extractvalue {{i64, i1}} {pair}, 0"));
+        let over = self.temp();
+        self.line(&format!("{over} = extractvalue {{i64, i1}} {pair}, 1"));
+        let keep = self.label("bump");
+        self.line(&format!("br i1 {over}, label %{end}, label %{keep}"));
+        self.mark(&keep);
         self.line(&format!("store i64 {bumped}, ptr {counter}, align 8"));
         self.line(&format!("br label %{head}"));
         self.mark(&end);

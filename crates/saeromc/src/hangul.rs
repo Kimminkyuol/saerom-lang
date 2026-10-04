@@ -18,7 +18,6 @@ const CODAS: [char; 27] = [
 pub enum Pos {
     Verb,
     Descriptive,
-    Passive,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,7 +256,6 @@ impl Pos {
         match self {
             Pos::Verb => "verb",
             Pos::Descriptive => "descriptive",
-            Pos::Passive => "passive",
         }
     }
 }

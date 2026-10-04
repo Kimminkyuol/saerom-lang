@@ -167,11 +167,6 @@ fn expr_tree(expr: &Expr) -> Tree {
             node(format!("field {name}"), vec![expr_tree(owner)])
         }
         Expr::Call(call) => call_tree(call),
-        Expr::Passive(passive) => {
-            let mut children = vec![node("head", vec![expr_tree(&passive.head)])];
-            children.extend(passive.slots.iter().map(slot_tree));
-            node(format!("passive {}", passive.verb), children)
-        }
         Expr::And { left, right, .. } => joined("그리고", left, right),
         Expr::Or { left, right, .. } => joined("또는", left, right),
     }

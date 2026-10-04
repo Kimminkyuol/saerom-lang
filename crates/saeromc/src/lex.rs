@@ -94,8 +94,10 @@ struct Splitting {
     take_copula: bool,
 }
 
+// 오류 표시도 같은 글을 써야 자리가 맞는다.
 pub fn ready(source: &str) -> String {
-    to_nfc(source).replace('\t', "    ")
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    to_nfc(source).replace("\r\n", "\n").replace('\t', "    ")
 }
 
 pub fn tokenize(source: &str, vocab: &Vocabulary) -> Result<Vec<Token>> {
@@ -256,13 +258,20 @@ impl Lexer<'_> {
             if let Some(head) = body_before(chunk, form) {
                 return one(Tok::Verb {
                     name: format!("{head}되다"),
-                    pos: Pos::Passive,
+                    pos: Pos::Verb,
                     ending,
                 });
             }
         }
         if let Some(&(_, ending)) = words::COPULA.iter().find(|&&(f, _)| f == chunk) {
             return one(Tok::Copula { ending });
+        }
+        // 동사 자리로 넘기는 `줄이다`가 `줄`+`이다`로 쪼개지지 않게.
+        if chunk
+            .strip_suffix('다')
+            .is_some_and(|stem| self.vocab.stems.contains(stem))
+        {
+            return one(Tok::Name(chunk.into()));
         }
         if splitting.take_copula {
             if let Some((form, ending)) = words::copula_suffix(chunk, &|head| self.knows(head))
@@ -353,12 +362,18 @@ fn digits_end(chars: &[char], start: usize) -> usize {
 }
 
 fn number(raw: &str, line: usize, col: usize, end: usize) -> Result<Num> {
+    let span = Span::new(line, col, end);
     if let Ok(value) = raw.parse::<i64>() {
         return Ok(Num::Int(value));
     }
-    raw.parse::<f64>()
-        .map(Num::Float)
-        .map_err(|_| Diag::lex(msg::not_number(raw), Span::new(line, col, end)))
+    let value = raw
+        .parse::<f64>()
+        .map_err(|_| Diag::lex(msg::not_number(raw), span))?;
+    // 점 없는 수는 정수다. 넘친다고 몰래 실수가 되지 않는다.
+    if !raw.contains('.') || !value.is_finite() {
+        return Err(Diag::lex(msg::literal_overflow(raw), span));
+    }
+    Ok(Num::Float(value))
 }
 
 fn scan_string(chars: &[char], start: usize, line: usize) -> Result<(Token, usize)> {
@@ -426,6 +441,7 @@ fn unescape(ch: char) -> char {
     match ch {
         'n' => '\n',
         't' => '\t',
+        'r' => '\r',
         other => other,
     }
 }

@@ -159,6 +159,7 @@ fn operation(op: Builtin) -> Op {
         Builtin::Sub => value("sr_sub", 2),
         Builtin::Neg => value("sr_neg", 1),
         Builtin::Sort => value("sr_sort", 1),
+        Builtin::SortBy => value("sr_sort_by", 2),
         Builtin::Mul => value("sr_mul", 2),
         Builtin::Div => value("sr_div", 2),
         Builtin::Rem => value("sr_rem", 2),
@@ -168,6 +169,7 @@ fn operation(op: Builtin) -> Op {
         Builtin::Equal => value("sr_equal", 2),
         Builtin::Truthy => value("sr_truthy_value", 1),
         Builtin::Read => value("sr_read", 2),
+        Builtin::Args => value("sr_args", 0),
         Builtin::Close => Op {
             symbol: "sr_close",
             arity: 1,
@@ -186,8 +188,11 @@ declare void @sr_table_new(ptr)
 declare void @sr_table_push(ptr, ptr)
 declare i64 @sr_table_len(ptr)
 declare i64 @sr_each_len(ptr)
+declare i64 @sr_sort_len(ptr)
+declare void @sr_sort_by(ptr, ptr, ptr)
 declare void @sr_index_set(ptr, ptr, ptr)
-declare void @sr_table_get(ptr, ptr, i64)
+declare void @sr_each_get(ptr, ptr, i64, i64)
+declare void @sr_each_check(ptr, i64)
 declare void @sr_table_put(ptr, ptr, i64, ptr)
 declare void @sr_push(ptr, ptr)
 declare void @sr_remove_at(ptr, ptr)
@@ -199,7 +204,8 @@ declare void @sr_pick_get(ptr, ptr, ptr, ptr)
 declare void @sr_pick_set(ptr, ptr, ptr)
 declare void @sr_field_set(ptr, ptr, i64, ptr)
 declare void @sr_index(ptr, ptr, ptr)
-declare void @sr_range(ptr, ptr, ptr, ptr)
+declare i64 @sr_range_count(ptr, ptr, ptr)
+declare void @sr_range_at(ptr, ptr, ptr, ptr, i64)
 declare i8 @sr_name_is(ptr, i64, ptr, i64)
 declare void @sr_print(ptr)
 declare void @sr_print_parts(ptr, i64)
@@ -214,6 +220,12 @@ declare void @sr_rem(ptr, ptr, ptr)
 declare void @sr_quot(ptr, ptr, ptr)
 declare i64 @sr_quot_int(i64, i64)
 declare void @sr_overflow(ptr, i64)
+declare void @sr_div_zero()
+declare double @sr_root(double)
+declare void @sr_args(ptr)
+declare i32 @sr_order_int_real(i64, double)
+declare double @llvm.floor.f64(double)
+declare double @llvm.fabs.f64(double)
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
@@ -365,6 +377,13 @@ impl<'a> Emitter<'a> {
         self.line(&format!("store %Value zeroinitializer, ptr {dst}, align 8"));
     }
 
+    // 힙을 안 가리키는 값은 뿌리로 등록할 까닭이 없다.
+    fn nothing(&mut self) -> String {
+        let out = self.raw("%Value");
+        self.clear_value(&out);
+        out
+    }
+
     fn boxed(&mut self, val: Val) -> String {
         if val.repr == Repr::Boxed {
             return val.name;
@@ -383,7 +402,7 @@ impl<'a> Emitter<'a> {
             }
             Repr::Boxed => unreachable!(),
         };
-        let holder = self.slot();
+        let holder = self.raw("%Value");
         let tag = self.field_ptr(&holder, 0);
         self.line(&format!("store i64 {}, ptr {tag}, align 8", val.repr.tag()));
         let cell = self.field_ptr(&holder, 1);
@@ -468,6 +487,11 @@ impl<'a> Emitter<'a> {
             | ((span.line as u64 & 0xFF_FFFF) << 24)
             | ((span.col as u64 & 0xFFF) << 12)
             | width as u64
+    }
+
+    // 사용자 코드를 거치면 SR_POS 가 바뀌어 있다. 다음 `at`이 다시 적게 한다.
+    fn returned(&mut self) {
+        self.marked = None;
     }
 
     fn at(&mut self, span: Span) {

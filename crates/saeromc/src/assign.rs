@@ -196,12 +196,6 @@ impl Check<'_> {
                 self.expr(place, live);
             }
             Expr::Call(call) => self.call(call, live),
-            Expr::Passive(passive) => {
-                self.expr(&passive.head, live);
-                for slot in &passive.slots {
-                    self.expr(&slot.expr, live);
-                }
-            }
             Expr::And { left, right, .. } | Expr::Or { left, right, .. } => {
                 self.expr(left, live);
                 self.expr(right, live);

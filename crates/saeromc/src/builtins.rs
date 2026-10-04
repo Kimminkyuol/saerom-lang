@@ -10,6 +10,7 @@ pub enum Builtin {
     Push,
     Insert,
     Sort,
+    SortBy,
     RemoveAt,
     RemoveKey,
     Sub,
@@ -27,6 +28,7 @@ pub enum Builtin {
     Write,
     Nothing,
     Neg,
+    Args,
 }
 
 pub struct Def {
@@ -58,6 +60,7 @@ pub fn table() -> &'static [Def] {
             one("종료하다", "로", Builtin::Stop),
             one("복사하다", "를", Builtin::Clone),
             one("정렬하다", "를", Builtin::Sort),
+            two("정렬하다", "를", "로", Builtin::SortBy),
             two("바꾸다", "를", "로", Builtin::Convert),
             two("더하다", "에", "를", Builtin::Add),
             two("빼다", "에서", "를", Builtin::Sub),

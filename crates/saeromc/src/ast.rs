@@ -34,14 +34,6 @@ pub struct CallExpr {
 }
 
 #[derive(Clone, Debug)]
-pub struct PassiveExpr {
-    pub verb: String,
-    pub head: Expr,
-    pub slots: Vec<Slot>,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug)]
 pub enum Expr {
     Literal {
         value: Literal,
@@ -76,7 +68,6 @@ pub enum Expr {
         span: Span,
     },
     Call(Box<CallExpr>),
-    Passive(Box<PassiveExpr>),
     And {
         left: Box<Expr>,
         right: Box<Expr>,
@@ -102,7 +93,6 @@ impl Expr {
             | Expr::And { span, .. }
             | Expr::Or { span, .. } => *span,
             Expr::Call(call) => call.span,
-            Expr::Passive(passive) => passive.span,
         }
     }
 

@@ -10,6 +10,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 const TYPE_VALUES: [&str; 4] = ["정수", "실수", "문자열", "논리값"];
+const ARGS: &str = "실행인자";
+
+// 미리 매긴 이름. 덮어쓸 수 없다.
+fn prelude(name: &str) -> bool {
+    TYPE_VALUES.contains(&name) || name == ARGS
+}
 
 struct Verb {
     name: String,
@@ -20,8 +26,8 @@ struct Verb {
 #[derive(Default)]
 struct Tables {
     globals: HashMap<String, GlobalId>,
-    // 이 파일 맨 위에서 매긴 이름 -> 처음 매긴 줄
-    own: HashMap<String, usize>,
+    // 이 파일 맨 위에서 매긴 이름
+    own: std::collections::HashSet<String>,
     verbs: Vec<Verb>,
     nouns: HashMap<String, FuncId>,
     modules: HashMap<String, UnitId>,
@@ -31,8 +37,7 @@ struct Frame {
     unit: UnitId,
     locals: HashMap<String, LocalId>,
     count: u32,
-    // 함수 안이면 정의한 줄
-    defined_at: Option<usize>,
+    inside: bool,
     // 동사 자리 매개변수 -> 실제로 넘어온 동사 이름
     verbs: HashMap<String, String>,
 }
@@ -45,10 +50,10 @@ struct Generic {
 
 impl Frame {
     fn place(&mut self, name: &str, tables: &mut Tables, globals: &mut u32) -> Place {
-        if let Some(defined_at) = self.defined_at {
-            // 지역 > 정의보다 앞에서 매긴 이 파일의 전역 > 새 지역.
+        if self.inside {
+            // 지역 > 이 파일 최상위에서 매긴 전역 > 새 지역. 읽기처럼 위치를 안 탄다.
             // 가져온 전역은 덮어쓰지 않는다.
-            let outer = tables.own.get(name).is_some_and(|&line| line < defined_at);
+            let outer = tables.own.contains(name);
             if !self.locals.contains_key(name) && outer {
                 return Place::Global(tables.globals[name]);
             }
@@ -171,6 +176,24 @@ fn pick_verb(verbs: &[Verb], name: &str, used: &[Marker]) -> Option<(FuncId, Vec
         .map(|found| (found.func, found.params.clone()))
 }
 
+fn sort_key(call: &ast::CallExpr) -> Option<&str> {
+    let slots: Vec<&ast::Slot> = call.slots.iter().collect();
+    sort_slots(&slots).and_then(|(_, key)| key.as_name())
+}
+
+// `를`·`로` 두 자리일 때만 기준 정렬이다.
+fn sort_slots<'a>(slots: &[&'a ast::Slot]) -> Option<(&'a ast::Expr, &'a ast::Expr)> {
+    let find = |marker| slots.iter().find(|slot| slot.marker == marker);
+    match (
+        slots.len(),
+        find(Marker::Case("를")),
+        find(Marker::Case("로")),
+    ) {
+        (2, Some(over), Some(key)) => Some((&over.expr, &key.expr)),
+        _ => None,
+    }
+}
+
 fn order_args(mut args: Vec<(Marker, Expr)>, params: &[Marker]) -> Vec<Expr> {
     let mut out = Vec::with_capacity(params.len());
     for marker in params {
@@ -183,14 +206,37 @@ fn order_args(mut args: Vec<(Marker, Expr)>, params: &[Marker]) -> Vec<Expr> {
 }
 
 impl<'a> Resolver<'a> {
+    // 동사 자리 특수화로 같은 몸통을 여러 번 내리므로 같은 오류는 한 번만.
     fn note(&mut self, unit: UnitId, mut error: Diag) {
         error.unit = Some(unit);
-        self.errors.push(error);
+        let seen = self.errors.iter().any(|found| {
+            found.unit == error.unit && found.span == error.span && found.msg == error.msg
+        });
+        if !seen {
+            self.errors.push(error);
+        }
+    }
+
+    // 자료형 이름은 바꾸다가 읽는 내장 값이다. 덮어쓰면 `정수로 바꾼 값`이 엉뚱해진다.
+    fn prelude_name(&mut self, unit: UnitId, name: &str, span: Span) {
+        if !prelude(name) {
+            return;
+        }
+        self.note(unit, Diag::name(msg::builtin_reserved(name), span));
+    }
+
+    // `X의 길이`는 내장·파생 필드를 먼저 읽는다. 그 이름으로 명칭을 쓰면 다시 못 읽는다.
+    fn key_name(&mut self, unit: UnitId, name: &str, span: Span) {
+        if crate::words::FIELDS.contains(&name) {
+            self.note(unit, Diag::name(msg::builtin_reserved(name), span));
+        } else if self.tables[unit].nouns.contains_key(name) {
+            self.note(unit, Diag::name(msg::already_defined(name), span));
+        }
     }
 
     fn declare(&mut self, unit: UnitId) {
         let loaded = self.loaded;
-        for name in TYPE_VALUES {
+        for name in TYPE_VALUES.iter().chain([&ARGS]) {
             global_slot(name, &mut self.tables[unit], &mut self.globals);
         }
         let statements = &loaded.units[unit].statements;
@@ -209,10 +255,9 @@ impl<'a> Resolver<'a> {
         let mut bound = Vec::new();
         bind_names(statements, &mut bound);
         // 가져온 이름과 겹쳐도 제 자리를 따로 둔다. 모듈 쪽 값은 건드리지 않는다.
-        for (name, _, line) in bound {
+        for (name, _) in bound {
             let tables = &mut self.tables[unit];
-            if !tables.own.contains_key(&name) {
-                tables.own.insert(name.clone(), line);
+            if tables.own.insert(name.clone()) {
                 tables.globals.insert(name, self.globals);
                 self.globals += 1;
             }
@@ -322,7 +367,11 @@ impl<'a> Resolver<'a> {
                     body,
                     span,
                 } => {
-                    if crate::sig::Signatures::reserved(name) {
+                    // 동사 자리도 몸통 안에서 내장 동사를 가린다.
+                    if let Some(name) = std::iter::once(name)
+                        .chain(params.iter().map(|(_, name)| name))
+                        .find(|name| crate::sig::Signatures::reserved(name) || prelude(name))
+                    {
                         self.note(unit, Diag::name(msg::builtin_reserved(name), *span));
                         continue;
                     }
@@ -343,6 +392,7 @@ impl<'a> Resolver<'a> {
                         module: self.module_of[unit],
                         params: Vec::new(),
                         locals: 0,
+                        names: Vec::new(),
                         body: Vec::new(),
                         span: *span,
                     });
@@ -373,7 +423,13 @@ impl<'a> Resolver<'a> {
                         func,
                     });
                 }
-                ASt::Noun { name, span, .. } => {
+                ASt::Noun {
+                    name, owner, span, ..
+                } => {
+                    if prelude(owner) {
+                        self.note(unit, Diag::name(msg::builtin_reserved(owner), *span));
+                        continue;
+                    }
                     if crate::words::FIELDS.contains(&name.as_str()) {
                         self.note(unit, Diag::name(msg::builtin_reserved(name), *span));
                         continue;
@@ -385,6 +441,7 @@ impl<'a> Resolver<'a> {
                         module: self.module_of[unit],
                         params: Vec::new(),
                         locals: 0,
+                        names: Vec::new(),
                         body: Vec::new(),
                         span: *span,
                     });
@@ -413,7 +470,11 @@ fn verb_slots(params: &[(Marker, String)], body: &[ASt]) -> Vec<String> {
     calls_in_block(body, &mut called);
     params
         .iter()
-        .filter(|(_, name)| called.iter().any(|call| call.verb == *name))
+        .filter(|(_, name)| {
+            called.iter().any(|call| {
+                call.verb == *name || (call.verb == "정렬하다" && sort_key(call) == Some(name))
+            })
+        })
         .map(|(_, name)| name.clone())
         .collect()
 }
@@ -471,12 +532,6 @@ fn calls_in_expr<'b>(expr: &'b ast::Expr, into: &mut Vec<&'b ast::CallExpr>) {
                 calls_in_expr(&slot.expr, into);
             }
         }
-        ast::Expr::Passive(passive) => {
-            calls_in_expr(&passive.head, into);
-            for slot in &passive.slots {
-                calls_in_expr(&slot.expr, into);
-            }
-        }
         ast::Expr::Table { items, entries, .. } => {
             for item in items {
                 calls_in_expr(item, into);
@@ -528,21 +583,20 @@ fn blocks_of(statement: &ASt) -> Vec<&[ASt]> {
     }
 }
 
-// (이름, 반복 변수인가, 줄)
-fn bind_names(statements: &[ASt], into: &mut Vec<(String, bool, usize)>) {
+// (이름, 반복 변수인가)
+fn bind_names(statements: &[ASt], into: &mut Vec<(String, bool)>) {
     for statement in statements {
-        let line = statement.span().line;
         match statement {
             ASt::Declare { assigns, .. } => into.extend(
                 assigns
                     .iter()
                     .filter(|(target, _)| target.fields.is_empty())
-                    .map(|(target, _)| (target.root.clone(), false, line)),
+                    .map(|(target, _)| (target.root.clone(), false)),
             ),
             ASt::Loop {
                 kind: LoopKind::Range { variable, .. } | LoopKind::Each { variable, .. },
                 ..
-            } => into.push((variable.clone(), true, line)),
+            } => into.push((variable.clone(), true)),
             ASt::Define { .. } | ASt::Noun { .. } => continue,
             _ => {}
         }
@@ -564,7 +618,7 @@ impl<'a> Resolver<'a> {
             unit,
             locals: HashMap::new(),
             count: 0,
-            defined_at: None,
+            inside: false,
             verbs: HashMap::new(),
         };
         let mut init = Vec::new();
@@ -575,6 +629,14 @@ impl<'a> Resolver<'a> {
                 value: Expr::Str(Rc::from(name)),
             });
         }
+        init.push(Stmt::Set {
+            place: Place::Global(self.tables[unit].globals[ARGS]),
+            value: Expr::Call {
+                callee: Callee::Op(crate::builtins::Builtin::Args),
+                args: Vec::new(),
+                span: Span::default(),
+            },
+        });
         self.lower_into(&mut frame, statements, &mut init);
         let pairs: Vec<(String, FuncId)> = self.tables[unit]
             .nouns
@@ -597,6 +659,11 @@ impl<'a> Resolver<'a> {
             source: Rc::from(found.source.as_str()),
             init,
             nouns,
+            globals: self.tables[unit]
+                .globals
+                .iter()
+                .map(|(name, &slot)| (Rc::from(name.as_str()), slot))
+                .collect(),
         }
     }
 
@@ -667,7 +734,7 @@ impl<'a> Resolver<'a> {
                 unit,
                 locals: HashMap::new(),
                 count: 0,
-                defined_at: Some(statement.span().line),
+                inside: true,
                 verbs: self.bindings[index].clone(),
             };
             // 동사 자리가 채워지지 않은 틀은 부를 수 없다. 특수화한 것만 낮춘다.
@@ -694,7 +761,7 @@ impl<'a> Resolver<'a> {
             let mut bound = Vec::new();
             bind_names(body, &mut bound);
             // 반복 변수는 언제나 지역
-            for (name, looped, _) in bound {
+            for (name, looped) in bound {
                 if looped {
                     frame.bind_local(&name);
                 } else {
@@ -718,6 +785,11 @@ impl<'a> Resolver<'a> {
             let lowered = self.lower_block(&mut frame, body);
             self.functions[index].params = params;
             self.functions[index].locals = frame.count;
+            self.functions[index].names = frame
+                .locals
+                .iter()
+                .map(|(name, &slot)| (Rc::from(name.as_str()), slot))
+                .collect();
             self.functions[index].body = lowered;
             index += 1;
         }
@@ -742,6 +814,7 @@ impl<'a> Resolver<'a> {
                 for (target, value) in assigns {
                     let value = self.lower_expr(frame, value);
                     if target.fields.is_empty() {
+                        self.prelude_name(frame.unit, &target.root, target.span);
                         let place = frame.place(
                             &target.root,
                             &mut self.tables[frame.unit],
@@ -791,6 +864,7 @@ impl<'a> Resolver<'a> {
                                 });
                             }
                             None => {
+                                self.key_name(frame.unit, name, target.span);
                                 let field = self.names.intern(name);
                                 out.push(Stmt::SetField {
                                     owner,
@@ -859,6 +933,7 @@ impl<'a> Resolver<'a> {
                     let start = self.lower_expr(frame, start);
                     let stop = self.lower_expr(frame, stop);
                     let step = step.as_ref().map(|step| self.lower_expr(frame, step));
+                    self.prelude_name(frame.unit, variable, *span);
                     let place =
                         frame.place(variable, &mut self.tables[frame.unit], &mut self.globals);
                     let body = self.lower_block(frame, body);
@@ -878,6 +953,7 @@ impl<'a> Resolver<'a> {
                 }
                 LoopKind::Each { variable, over } => {
                     let over = self.lower_expr(frame, over);
+                    self.prelude_name(frame.unit, variable, *span);
                     let place =
                         frame.place(variable, &mut self.tables[frame.unit], &mut self.globals);
                     let body = self.lower_block(frame, body);
@@ -938,7 +1014,11 @@ impl<'a> Resolver<'a> {
                 ast::Literal::Bool(found) => Expr::Bool(*found),
             },
             ast::Expr::Name { name, span } => self.read_name(frame, name, *span),
-            ast::Expr::Table { items, entries, .. } => Expr::Table(
+            ast::Expr::Table {
+                items,
+                entries,
+                span,
+            } => Expr::Table(
                 items
                     .iter()
                     .map(|item| self.lower_expr(frame, item))
@@ -946,6 +1026,7 @@ impl<'a> Resolver<'a> {
                 entries
                     .iter()
                     .map(|(key, value)| {
+                        self.key_name(frame.unit, key, *span);
                         let key = self.names.intern(key);
                         (key, self.lower_expr(frame, value))
                     })
@@ -982,7 +1063,6 @@ impl<'a> Resolver<'a> {
                 }
             }
             ast::Expr::Call(call) => self.lower_call(frame, call),
-            ast::Expr::Passive(passive) => self.lower_passive(frame, passive),
             ast::Expr::And { left, right, .. } => {
                 let left = self.lower_expr(frame, left);
                 Expr::And(Box::new(left), Box::new(self.lower_expr(frame, right)))
@@ -1088,6 +1168,11 @@ impl<'a> Resolver<'a> {
         if !namespaced && call.verb == "삽입하다" {
             return self.lower_insert(frame, call, &slots);
         }
+        if !namespaced && call.verb == "정렬하다" {
+            if let Some((over, key)) = sort_slots(&slots) {
+                return self.lower_sort_by(frame, call, over, key);
+            }
+        }
         if call.verb == "이다" {
             if let Some(found) = self.lower_predicate(frame, call, &slots, home) {
                 return found;
@@ -1107,6 +1192,64 @@ impl<'a> Resolver<'a> {
             args.push((slot.marker, value));
         }
         self.finish_call(frame, &call.verb, args, home, namespaced, call, &bound)
+    }
+
+    // `<묶음>을 <동사>로 정렬한 값`. 자리마다 동사를 부른 값이 기준이다.
+    fn lower_sort_by(
+        &mut self,
+        frame: &mut Frame,
+        call: &'a ast::CallExpr,
+        over: &'a ast::Expr,
+        key: &'a ast::Expr,
+    ) -> Expr {
+        let Some(given) = key.as_name() else {
+            self.note(
+                frame.unit,
+                Diag::syntax(msg::want_verb_name("로"), key.span()),
+            );
+            return Expr::Nothing;
+        };
+        let given = frame
+            .verbs
+            .get(given)
+            .map_or(given, String::as_str)
+            .to_string();
+        let verbs = &self.tables[frame.unit].verbs;
+        if !verbs.iter().any(|verb| verb.name == given) {
+            self.note(
+                frame.unit,
+                Diag::name(msg::verb_undefined(&given), key.span()),
+            );
+            return Expr::Nothing;
+        }
+        let Some(func) = verbs
+            .iter()
+            .rev()
+            .find(|verb| verb.name == given && verb.params.len() == 1)
+            .map(|verb| verb.func)
+        else {
+            self.note(frame.unit, Diag::name(msg::not_one_arg(&given), key.span()));
+            return Expr::Nothing;
+        };
+        let over = self.lower_expr(frame, over);
+        // 자리마다 담아 둘 숨은 칸
+        let item = if frame.inside {
+            frame.count += 1;
+            Expr::Local(frame.count - 1)
+        } else {
+            self.globals += 1;
+            Expr::Global(self.globals - 1)
+        };
+        let key = Expr::Call {
+            callee: Callee::User(func),
+            args: vec![item.clone()],
+            span: call.span,
+        };
+        Expr::Call {
+            callee: Callee::Op(builtins::Builtin::SortBy),
+            args: vec![over, item, key],
+            span: call.span,
+        }
     }
 
     // `<묶음>의 <n>번째에 <값>을 삽입한다`
@@ -1331,6 +1474,7 @@ impl<'a> Resolver<'a> {
             module: source.module,
             params: Vec::new(),
             locals: 0,
+            names: Vec::new(),
             body: Vec::new(),
             span: source.span,
         });
@@ -1402,52 +1546,6 @@ impl<'a> Resolver<'a> {
         }
         self.unknown_call(frame.unit, home, namespaced, verb, &used, call.span);
         Expr::Nothing
-    }
-
-    fn lower_passive(&mut self, frame: &mut Frame, passive: &'a ast::PassiveExpr) -> Expr {
-        let used: Vec<Marker> = passive.slots.iter().map(|slot| slot.marker).collect();
-        let found = self.tables[frame.unit]
-            .verbs
-            .iter()
-            .rev()
-            .find(|verb| {
-                verb.name == passive.verb
-                    && verb.params.len() == used.len() + 1
-                    && crate::sig::fits(&used, &verb.params)
-            })
-            .map(|verb| (verb.func, verb.params.clone()));
-        let Some((func, params)) = found else {
-            let mut left = used.clone();
-            left.push(Marker::Bare);
-            self.unknown_call(
-                frame.unit,
-                frame.unit,
-                false,
-                &passive.verb,
-                &left,
-                passive.span,
-            );
-            return Expr::Nothing;
-        };
-        let mut empty = params.clone();
-        for marker in &used {
-            if let Some(at) = empty.iter().position(|kept| kept == marker) {
-                empty.remove(at);
-            }
-        }
-        let slot = empty.first().copied().unwrap_or(Marker::Bare);
-        let mut args = Vec::with_capacity(params.len());
-        for one in &passive.slots {
-            let value = self.lower_expr(frame, &one.expr);
-            args.push((one.marker, value));
-        }
-        let head = self.lower_expr(frame, &passive.head);
-        args.push((slot, head));
-        Expr::Call {
-            callee: Callee::User(func),
-            args: order_args(args, &params),
-            span: passive.span,
-        }
     }
 
     fn unknown_call(

@@ -37,7 +37,7 @@ pub fn particles_by_length() -> &'static [(&'static str, &'static str, &'static 
 
 pub const STRUCTURAL: &[&str] = &["마다", "부터", "까지", "씩", "모듈"];
 
-pub const FIELDS: &[&str] = &["자료형", "길이", "명칭"];
+pub const FIELDS: &[&str] = &["자료형", "길이", "명칭", "제곱근"];
 
 pub const KEYWORDS: &[&str] = &[
     "만약",
@@ -188,6 +188,41 @@ pub const BUILTIN_VERBS: &[Builtin] = &[
     },
 ];
 
+impl Builtin {
+    fn surface(&self, ending: Ending) -> Option<String> {
+        self.overrides
+            .iter()
+            .find(|&&(which, _)| which == ending)
+            .map(|&(_, form)| form.to_string())
+            .or_else(|| conjugate(self.stem, self.pos, ending))
+    }
+}
+
+// 사전형에서 활용형들. 불규칙 대체형은 빼고 규칙형만.
+pub fn forms_of(verb: &str) -> Vec<(Ending, String)> {
+    if let Some(found) = BUILTIN_VERBS.iter().find(|found| found.name == verb) {
+        return REGULAR_ENDINGS
+            .iter()
+            .filter_map(|&ending| Some((ending, found.surface(ending)?)))
+            .collect();
+    }
+    for (tail, table) in [("하다", HADA_FORMS), ("되다", DOEDA_FORMS)] {
+        if let Some(head) = verb.strip_suffix(tail).filter(|head| !head.is_empty()) {
+            return table
+                .iter()
+                .map(|&(form, ending)| (ending, format!("{head}{form}")))
+                .collect();
+        }
+    }
+    let Some(stem) = verb.strip_suffix('다').filter(|stem| !stem.is_empty()) else {
+        return Vec::new();
+    };
+    REGULAR_ENDINGS
+        .iter()
+        .filter_map(|&ending| Some((ending, conjugate(stem, Pos::Verb, ending)?)))
+        .collect()
+}
+
 pub type FormTable = HashMap<String, (String, Pos, Ending)>;
 
 pub fn builtin_forms() -> &'static FormTable {
@@ -196,13 +231,7 @@ pub fn builtin_forms() -> &'static FormTable {
         let mut table = FormTable::new();
         for found in BUILTIN_VERBS {
             for &ending in &REGULAR_ENDINGS {
-                let surface = found
-                    .overrides
-                    .iter()
-                    .find(|&&(which, _)| which == ending)
-                    .map(|&(_, form)| form.to_string())
-                    .or_else(|| conjugate(found.stem, found.pos, ending));
-                if let Some(surface) = surface {
+                if let Some(surface) = found.surface(ending) {
                     table
                         .entry(surface)
                         .or_insert((found.name.into(), found.pos, ending));

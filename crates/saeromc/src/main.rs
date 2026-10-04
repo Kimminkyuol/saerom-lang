@@ -39,6 +39,7 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let mut only_tokens = false;
     let mut only_ast = false;
     let mut only_check = false;
+    let mut formatting = false;
     let mut only_hir = false;
     let mut only_types = false;
     // 최적화는 기본이다. 끄려면 -O0.
@@ -51,6 +52,10 @@ fn run(args: &[String]) -> Result<(), Fault> {
             "--dump-tokens" => only_tokens = true,
             "--dump-ast" => only_ast = true,
             "--check" => only_check = true,
+            "--format" => formatting = true,
+            "--lsp" => {
+                return saeromc::lsp::serve().map_err(|error| Fault::Message(error.to_string()))
+            }
             "--dump-hir" => only_hir = true,
             "--dump-types" => only_types = true,
             "-o" => output = Some(PathBuf::from(rest.next().ok_or(Fault::Usage)?)),
@@ -66,6 +71,15 @@ fn run(args: &[String]) -> Result<(), Fault> {
     let source = std::fs::read_to_string(path)
         .map_err(|error| complain(&msg::source_unreadable(path, &error.to_string())))?;
     let base_dir = Path::new(path).parent();
+    if formatting {
+        let made = saeromc::format(&source, base_dir)
+            .map_err(|diag| render(&[diag], &source, path))?;
+        if made != source {
+            std::fs::write(path, made)
+                .map_err(|error| complain(&msg::write_failed(path, &error.to_string())))?;
+        }
+        return Ok(());
+    }
     if only_tokens {
         let found = saeromc::tokens(&source, base_dir)
             .map_err(|diag| render(&[diag], &source, path))?;

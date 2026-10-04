@@ -106,7 +106,7 @@ pub fn resolve_module(name: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
     Some(found.canonicalize().unwrap_or(found))
 }
 
-fn std_dirs() -> Vec<PathBuf> {
+pub fn std_dirs() -> Vec<PathBuf> {
     let mut found = Vec::new();
     if let Some(given) = std::env::var_os("SAEROM_STD") {
         found.push(PathBuf::from(given));

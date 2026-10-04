@@ -127,7 +127,7 @@ fn frame(level: usize, name: &str, here: u64) -> String {
 
 fn trace() -> String {
     if !unsafe { std::ptr::read(&raw const TRACED) } {
-        return report::note(msg::TRACE_OFF);
+        return String::new();
     }
     let depth = unsafe { std::ptr::read(&raw const SR_DEPTH) } as usize;
     let shown = depth.min(FRAMES);
@@ -161,6 +161,9 @@ pub fn fail(kind: &str, message: String) -> ! {
         ),
         None => eprint!("{}", report::plain(kind, &message)),
     }
-    eprint!("\n{}", trace());
+    let traced = trace();
+    if !traced.is_empty() {
+        eprint!("\n{traced}");
+    }
     std::process::exit(1);
 }

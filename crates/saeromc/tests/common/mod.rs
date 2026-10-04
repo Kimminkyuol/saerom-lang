@@ -87,3 +87,32 @@ pub fn build_and_run(source: &str, name: &str) -> String {
     );
     String::from_utf8_lossy(&ran.stdout).into_owned()
 }
+
+// 컴파일이나 실행이 실패해야 한다. 첫 줄(오류 문구)을 돌려준다.
+pub fn build_and_fail(source: &str, name: &str) -> String {
+    let shown = build_and_fail_all(source, name);
+    shown.lines().next().unwrap_or_default().to_string()
+}
+
+pub fn build_and_fail_all(source: &str, name: &str) -> String {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let file = dir.join(format!("{name}.sr"));
+    std::fs::write(&file, source).expect("소스를 쓸 수 없음");
+    let output = dir.join(name);
+    let built = std::process::Command::new(env!("CARGO_BIN_EXE_saeromc"))
+        .arg(&file)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("saeromc 를 부를 수 없음");
+    let failed = if built.status.success() {
+        let ran = std::process::Command::new(&output)
+            .output()
+            .expect("실행할 수 없음");
+        assert!(!ran.status.success(), "실패해야 함");
+        ran.stderr
+    } else {
+        built.stderr
+    };
+    String::from_utf8_lossy(&failed).into_owned()
+}

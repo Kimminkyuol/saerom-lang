@@ -1,8 +1,9 @@
 use crate::msg;
-use crate::text::{show, to_text, write_text};
+use crate::text::{float_text, show, to_text, write_text};
 use crate::value::*;
 use crate::{fault::fail, io::flush_out};
-use std::collections::HashMap;
+use std::cell::UnsafeCell;
+use std::collections::{HashMap, HashSet};
 
 pub type Nouns = Option<
     unsafe extern "C" fn(
@@ -14,8 +15,14 @@ pub type Nouns = Option<
 >;
 
 #[no_mangle]
+// 글이면 메시지와 1, 수면 그 코드로 조용히.
 pub unsafe extern "C" fn sr_stop(message: *const Value) {
-    fail(msg::STOP, to_text(at(message)));
+    let found = at(message);
+    if found.tag == INT {
+        flush_out();
+        std::process::exit(found.as_int() as i32);
+    }
+    fail(msg::STOP, to_text(found));
 }
 
 fn numbers(verb: &str, values: [&Value; 2]) {
@@ -33,7 +40,7 @@ fn both_int(left: &Value, right: &Value) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_str(out: *mut Value, bytes: *const u8, len: usize) {
-    *out = Value::text(name_of(bytes, len).to_string());
+    *out = Value::text_of(name_of(bytes, len));
 }
 
 // 리터럴은 부를 때마다 힙에 복사할 이유가 없다. 자리마다 한 번만 만든다.
@@ -169,18 +176,14 @@ fn copy_in(found: &Value, made: &mut HashMap<u64, Value>) -> Value {
         .iter()
         .map(|(key, value)| (*key, copy_in(value, made)))
         .collect();
-    *copy.as_table() = Table { items, keys };
+    *copy.as_table() = Table::new(items, keys);
     copy
 }
 
 fn at_index(found: &Value, index: usize) -> Value {
     match found.tag {
         TABLE => found.as_table().items[index],
-        _ => Value::text(
-            crate::text::char_at(found.as_text(), index)
-                .expect("글자")
-                .to_owned(),
-        ),
+        _ => Value::text_of(crate::text::char_at(found.as_text(), index).expect("글자")),
     }
 }
 
@@ -208,6 +211,10 @@ pub unsafe extern "C" fn sr_field_get(
             .map(|(key, _)| Value::text(key.to_string()))
             .collect();
         *out = Value::items(names);
+        return;
+    }
+    if field == "제곱근" && owner.number() {
+        *out = Value::float(sr_root(owner.number_value()));
         return;
     }
     if field == "길이" {
@@ -277,9 +284,24 @@ pub unsafe extern "C" fn sr_pick_set(
     key: *const Value,
     value: *const Value,
 ) {
-    // 빌린 글자를 명칭으로 쥐면 그 글자가 수집될 때 무너진다. 따로 남긴다.
-    let name: &'static str = key_text(at(key)).to_string().leak();
+    let name = intern(key_text(at(key)));
     sr_field_set(owner, name.as_ptr(), name.len(), value);
+}
+
+// 빌린 글자를 명칭으로 쥐면 그 글자가 수집될 때 무너진다. 따로 남기되
+// 같은 명칭은 한 번만 남긴다. 쓸 때마다 남기면 고리에서 샌다.
+fn intern(text: &str) -> &'static str {
+    struct Names(UnsafeCell<Option<HashSet<&'static str>>>);
+    unsafe impl Sync for Names {}
+    static NAMES: Names = Names(UnsafeCell::new(None));
+    // 런타임은 홀실이라 갈래 다툼이 없다.
+    let names = unsafe { &mut *NAMES.0.get() }.get_or_insert_with(HashSet::new);
+    if let Some(&found) = names.get(text) {
+        return found;
+    }
+    let made: &'static str = text.to_string().leak();
+    names.insert(made);
+    made
 }
 
 #[no_mangle]
@@ -318,6 +340,14 @@ pub unsafe extern "C" fn sr_index(out: *mut Value, owner: *const Value, place: *
     *out = at_index(owner, index as usize - 1);
 }
 
+// 정수처럼 실수도 넘치면 멈춘다. 무한이 없으니 수가 아님도 생기지 않는다.
+fn finite(verb: &str, made: f64) -> f64 {
+    if !made.is_finite() {
+        fail(msg::ARITH, msg::overflow(verb));
+    }
+    made
+}
+
 fn arith(
     verb: &str,
     out: *mut Value,
@@ -334,7 +364,10 @@ fn arith(
             None => fail(msg::ARITH, msg::overflow(verb)),
         }
     } else {
-        Value::float(real(left.number_value(), right.number_value()))
+        Value::float(finite(
+            verb,
+            real(left.number_value(), right.number_value()),
+        ))
     };
     unsafe { *out = made };
 }
@@ -347,11 +380,15 @@ pub unsafe extern "C" fn sr_append(dst: *mut Value, tail: *const Value) {
         return sr_add(dst, dst, tail);
     }
     let text = held.as_string();
+    let old = text.as_str().as_ptr();
     if tail.tag == STR {
-        text.push_str(tail.as_text());
+        text.push(tail.as_text());
     } else {
-        write_text(text, tail);
+        let mut shown = String::new();
+        write_text(&mut shown, tail);
+        text.push(&shown);
     }
+    crate::text::moved(old, text.as_str().as_ptr());
 }
 
 #[no_mangle]
@@ -433,7 +470,7 @@ fn divisor(left: &Value, right: &Value) -> (f64, f64) {
 pub unsafe extern "C" fn sr_div(out: *mut Value, left: *const Value, right: *const Value) {
     // 늘 실수. 나누어 떨어지는지에 따라 갈래가 바뀌면 타입이 값에 매인다.
     let (a, b) = divisor(at(left), at(right));
-    *out = Value::float(a / b);
+    *out = Value::float(finite("나누다", a / b));
 }
 
 #[no_mangle]
@@ -444,7 +481,7 @@ pub unsafe extern "C" fn sr_quot(out: *mut Value, left: *const Value, right: *co
         return;
     }
     let (a, b) = divisor(left, right);
-    *out = Value::float((a / b).floor());
+    *out = Value::float(finite("나누다", a / b).floor());
 }
 
 // 나머지가 몫에 맞물리도록 내림 나눗셈을 쓴다.
@@ -453,7 +490,9 @@ pub extern "C" fn sr_quot_int(left: i64, right: i64) -> i64 {
     if right == 0 {
         fail(msg::ARITH, msg::DIV_ZERO.to_string());
     }
-    let made = left.wrapping_div(right);
+    let Some(made) = left.checked_div(right) else {
+        fail(msg::ARITH, msg::overflow("나누다"))
+    };
     let rest = left.wrapping_rem(right);
     if rest != 0 && (rest < 0) != (right < 0) {
         made - 1
@@ -465,6 +504,26 @@ pub extern "C" fn sr_quot_int(left: i64, right: i64) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn sr_overflow(bytes: *const u8, len: usize) -> ! {
     fail(msg::ARITH, msg::overflow(name_of(bytes, len)))
+}
+
+// 정수와 실수를 견준다. 작으면 -1, 같으면 0, 크면 1.
+#[no_mangle]
+pub extern "C" fn sr_order_int_real(whole: i64, real: f64) -> i32 {
+    crate::value::int_real(whole, real).map_or(0, |found| found as i32)
+}
+
+// 음수의 제곱근은 수가 아니다. 넘침처럼 멈춘다.
+#[no_mangle]
+pub extern "C" fn sr_root(found: f64) -> f64 {
+    if found < 0.0 {
+        fail(msg::ARITH, msg::negative_root(&float_text(found)));
+    }
+    found.sqrt()
+}
+
+#[no_mangle]
+pub extern "C" fn sr_div_zero() -> ! {
+    fail(msg::ARITH, msg::DIV_ZERO.to_string())
 }
 
 #[no_mangle]
@@ -485,23 +544,29 @@ pub extern "C" fn sr_rem_real(left: f64, right: f64) -> f64 {
     if right == 0.0 {
         fail(msg::ARITH, msg::DIV_ZERO.to_string());
     }
-    left - right * (left / right).floor()
+    // fmod 는 정확하다. a - b×내림(a/b) 는 몫이 넘치면 수가 아님이 된다.
+    let made = left % right;
+    if made != 0.0 && (made < 0.0) != (right < 0.0) {
+        made + right
+    } else {
+        made
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn sr_rem(out: *mut Value, left: *const Value, right: *const Value) {
-    let (a, b) = divisor(at(left), at(right));
-    let made = a - b * (a / b).floor();
-    *out = if both_int(at(left), at(right)) {
-        Value::int(made as i64)
-    } else {
-        Value::float(made)
-    };
+    let (left, right) = (at(left), at(right));
+    if both_int(left, right) {
+        *out = Value::int(sr_rem_int(left.as_int(), right.as_int()));
+        return;
+    }
+    let (a, b) = divisor(left, right);
+    *out = Value::float(sr_rem_real(a, b));
 }
 
 fn order(verb: &str, left: &Value, right: &Value) -> std::cmp::Ordering {
     if left.number() && right.number() {
-        if let Some(found) = left.number_value().partial_cmp(&right.number_value()) {
+        if let Some(found) = crate::value::compare_numbers(left, right) {
             return found;
         }
     } else if left.tag == STR && right.tag == STR {
@@ -527,10 +592,34 @@ pub unsafe extern "C" fn sr_sort(out: *mut Value, found: *const Value) {
     let held = found.as_table();
     let mut items = held.items.clone();
     items.sort_by(|left, right| order("정렬하다", left, right));
-    *out = Value::table(Table {
-        items,
-        keys: held.keys.clone(),
-    });
+    *out = Value::table(Table::new(items, held.keys.clone()));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_sort_len(found: *const Value) -> i64 {
+    let found = at(found);
+    if found.tag != TABLE {
+        fail(msg::VALUE, msg::not_table("정렬하다", found.kind()));
+    }
+    found.as_table().items.len() as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_sort_by(out: *mut Value, found: *const Value, keys: *const Value) {
+    let held = at(found).as_table();
+    let keys = &at(keys).as_table().items;
+    // 기준 동사가 묶음 길이를 바꿨을 수 있다.
+    if keys.len() != held.items.len() {
+        fail(msg::VALUE, msg::RESIZED.to_string());
+    }
+    let mut pairs: Vec<(Value, Value)> = keys
+        .iter()
+        .copied()
+        .zip(held.items.iter().copied())
+        .collect();
+    pairs.sort_by(|left, right| order("정렬하다", &left.0, &right.0));
+    let items = pairs.into_iter().map(|(_, item)| item).collect();
+    *out = Value::table(Table::new(items, held.keys.clone()));
 }
 
 #[no_mangle]
@@ -553,6 +642,17 @@ pub unsafe extern "C" fn sr_not(out: *mut Value, found: *const Value) {
     *out = Value::bool(!at(found).truthy());
 }
 
+// "inf", "nan" 은 수로 치지 않는다.
+fn real(text: &str) -> Option<f64> {
+    text.parse::<f64>().ok().filter(|number| number.is_finite())
+}
+
+// 몫처럼 내림한다. 범위를 넘으면 없음.
+fn whole(number: f64) -> Option<i64> {
+    let cut = number.floor();
+    (cut >= i64::MIN as f64 && cut < i64::MAX as f64).then_some(cut as i64)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn sr_convert(out: *mut Value, found: *const Value, kind: *const Value) {
     let found = at(found);
@@ -562,22 +662,23 @@ pub unsafe extern "C" fn sr_convert(out: *mut Value, found: *const Value, kind: 
     *out = match kind.as_str() {
         "정수" | "수" => match found.tag {
             INT => *found,
-            FLOAT => Value::int(found.as_float() as i64),
-            BOOL => Value::int(found.as_bool() as i64),
-            STR => match found.as_text().trim().parse::<f64>() {
-                Ok(number) => Value::int(number as i64),
-                Err(_) => refuse(),
-            },
+            FLOAT => whole(found.as_float()).map_or_else(refuse, Value::int),
+            BOOL => Value::int(i64::from(found.as_bool())),
+            STR => {
+                let text = found.as_text().trim();
+                // 큰 정수가 실수를 거치며 뭉개지지 않게 먼저 정수로 읽는다.
+                match text.parse::<i64>() {
+                    Ok(number) => Value::int(number),
+                    Err(_) => real(text).and_then(whole).map_or_else(refuse, Value::int),
+                }
+            }
             _ => refuse(),
         },
         "실수" => match found.tag {
             INT => Value::float(found.as_int() as f64),
             FLOAT => *found,
-            BOOL => Value::float(found.as_bool() as i64 as f64),
-            STR => match found.as_text().trim().parse::<f64>() {
-                Ok(number) => Value::float(number),
-                Err(_) => refuse(),
-            },
+            BOOL => Value::float(f64::from(u8::from(found.as_bool()))),
+            STR => real(found.as_text().trim()).map_or_else(refuse, Value::float),
             _ => refuse(),
         },
         "문자열" => Value::text(to_text(found)),
@@ -626,10 +727,11 @@ pub unsafe extern "C" fn sr_name_is(
 #[no_mangle]
 pub unsafe extern "C" fn sr_each_len(found: *const Value) -> i64 {
     let found = at(found);
-    if found.tag != TABLE {
-        fail(msg::VALUE, msg::not_table("반복하다", found.kind()));
+    match found.tag {
+        TABLE => found.as_table().items.len() as i64,
+        STR => crate::text::char_len(found.as_text()) as i64,
+        _ => fail(msg::VALUE, msg::not_table("반복하다", found.kind())),
     }
-    found.as_table().items.len() as i64
 }
 
 #[no_mangle]
@@ -660,44 +762,78 @@ pub unsafe extern "C" fn sr_table_len(found: *const Value) -> i64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sr_table_get(out: *mut Value, found: *const Value, index: i64) {
-    let items = &at(found).as_table().items;
-    match items.get(index as usize) {
-        Some(found) => *out = *found,
-        // 고리가 길이를 미리 재 두므로, 도는 중에 줄면 여기로 온다.
-        None => fail(msg::VALUE, msg::SHRANK.to_string()),
+pub unsafe extern "C" fn sr_each_get(
+    out: *mut Value,
+    found: *const Value,
+    index: i64,
+    count: i64,
+) {
+    let found = at(found);
+    if found.tag == STR {
+        *out = at_index(found, index as usize);
+        return;
+    }
+    sr_each_check(found, count);
+    *out = found.as_table().items[index as usize];
+}
+
+// 처음 잰 길이와 다르면 줄든 늘든 멈춘다. 줄면 원소를 건너뛰고 늘면 놓친다.
+#[no_mangle]
+pub unsafe extern "C" fn sr_each_check(found: *const Value, count: i64) {
+    let found = at(found);
+    if found.tag == TABLE && found.as_table().items.len() as i64 != count {
+        fail(msg::VALUE, msg::RESIZED.to_string());
     }
 }
 
+fn range_whole(start: &Value, stop: &Value, step: &Value) -> bool {
+    start.tag == INT && stop.tag == INT && step.tag == INT
+}
+
+// 도는 횟수. 값은 시작 + k×간격으로 매번 구해 누적 오차가 없다.
 #[no_mangle]
-pub unsafe extern "C" fn sr_range(
+pub unsafe extern "C" fn sr_range_count(
+    start: *const Value,
+    stop: *const Value,
+    step: *const Value,
+) -> i64 {
+    let (start, stop, step) = (at(start), at(stop), at(step));
+    numbers("반복하다", [start, stop]);
+    numbers("반복하다", [step, step]);
+    if step.number_value() == 0.0 {
+        fail(msg::VALUE, msg::ZERO_STEP.to_string());
+    }
+    // 방향은 간격의 부호가 정한다. `1부터 0까지`는 한 번도 안 돈다.
+    if range_whole(start, stop, step) {
+        let gap = i128::from(stop.as_int()) - i128::from(start.as_int());
+        let by = i128::from(step.as_int());
+        if gap != 0 && (gap < 0) != (by < 0) {
+            return 0;
+        }
+        return i64::try_from(gap / by + 1).unwrap_or(i64::MAX);
+    }
+    let times = (stop.number_value() - start.number_value()) / step.number_value();
+    // 0.1씩 더한 끝값이 오차로 빠지지 않게 조금 봐준다.
+    if times.is_nan() || times < -1e-9 {
+        return 0;
+    }
+    (times + 1e-9).floor().min(i64::MAX as f64 - 1.0) as i64 + 1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sr_range_at(
     out: *mut Value,
     start: *const Value,
     stop: *const Value,
     step: *const Value,
+    index: i64,
 ) {
     let (start, stop, step) = (at(start), at(stop), at(step));
-    numbers("반복하다", [start, stop]);
-    numbers("반복하다", [step, step]);
-    let whole = start.tag == INT && stop.tag == INT && step.tag == INT;
-    let (from, to) = (start.number_value(), stop.number_value());
-    // 방향은 간격의 부호가 정한다. `1부터 0까지`는 한 번도 안 돈다.
-    let by = step.number_value();
-    if by == 0.0 {
-        fail(msg::VALUE, msg::ZERO_STEP.to_string());
-    }
-    let down = by < 0.0;
-    let mut made = Vec::new();
-    let mut now = from;
-    while if down { now >= to } else { now <= to } {
-        made.push(if whole {
-            Value::int(now as i64)
-        } else {
-            Value::float(now)
-        });
-        now += by;
-    }
-    *out = Value::items(made);
+    *out = if range_whole(start, stop, step) {
+        Value::int(start.as_int() + index * step.as_int())
+    } else {
+        Value::float(start.number_value() + index as f64 * step.number_value())
+    };
 }
 
 #[no_mangle]

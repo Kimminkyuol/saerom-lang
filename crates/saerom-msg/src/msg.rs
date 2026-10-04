@@ -13,7 +13,6 @@ pub const ERROR: &str = "오류";
 // ── 진단 범주 ─────────────────────────────────────────────────
 
 pub const HELP: &str = "도움말";
-pub const NOTE: &str = "참고";
 
 pub fn aborting(count: usize) -> String {
     format!("종료됨. (오류 {count}개)")
@@ -43,14 +42,13 @@ pub fn want_verb_name(name: &str) -> String {
 
 pub const TOO_MANY_SPECIAL: &str = "동사 특수화 홧수가 최대 허용치를 초과함";
 
-pub const SHRANK: &str = "반복 도중 묶음이 수정됨";
+pub const RESIZED: &str = "반복 도중 묶음이 수정됨";
 
 pub const STACK_DEEP: &str = "최대 재귀 깊이에 도달함";
 
 pub const TRACE: &str = "오류 경로 추적:";
 pub const FRAME_UNKNOWN: &str = "<알 수 없음>";
 pub const FRAME_TOP: &str = "<최상단>";
-pub const TRACE_OFF: &str = "`-g`로 컴파일하여 오류 경로를 추적할 수 있습니다.";
 
 // ── 어휘 ────────────────────────────────────────────────────
 
@@ -80,12 +78,10 @@ pub const TABLE_NO_END: &str = "묶음 항목이 '묶음'으로 끝나지 않음
 pub const DECL_NO_COPULA: &str = "선언문에서 '이다' 누락";
 pub const HEAD_NO_QUOTATIVE: &str = "정의에서 '라는 것은' 누락";
 pub const HEAD_NOT_DICT: &str = "정의 서술어 형태가 사전형이 아님";
-pub const HEAD_NOT_DICT_HELP: &str = "'<구문>* <사전형>라는 것은:' 형식 준수 필요";
 pub const NO_STEP_NUMBER: &str = "'<구문>간격' 형식 준수 필요";
 pub const WHILE_NOT_ONE: &str = "'동안' 절의 표현식이 단일하지 않음";
 pub const RETURN_NOT_ONE: &str = "반환할 값이 단일하지 않음";
 pub const EXEC_CONDITIONAL: &str = "실행문에 쓸 수 없는 어미: -면";
-pub const EXEC_CONDITIONAL_HELP: &str = "조건문은 '만약'으로 시작해야 함";
 pub const EACH_NOT_NAME: &str = "'마다'의 수식 대상이 식별자가 아님";
 pub const LOOP_NO_EACH: &str = "반복문에 '마다' 누락";
 pub const LOOP_NO_RANGE: &str = "반복문 범위 누락";
@@ -128,11 +124,15 @@ pub fn builtin_reserved(name: &str) -> String {
     format!("내장 식별자를 정의할 수 없음: '{name}'")
 }
 
-pub const NAME_IS_PARTICLE: &str = "이름에 조사를 사용할 수 없습니다.";
+pub fn name_is_particle(particle: &str) -> String {
+    format!("이름에 조사를 사용할 수 없음: '{particle}'")
+}
 
 pub fn name_shadows_verb(name: &str, verb: &str) -> String {
     format!("'{name}'이 동사 '{verb}'의 활용형과 중복됨")
 }
+
+pub const NO_PREDICATE: &str = "서술어가 없음";
 
 pub fn not_a_value(found: &str) -> String {
     format!("값이 아님: {found}")
@@ -179,7 +179,11 @@ pub fn not_thing(thing: &str) -> String {
 }
 
 pub fn noun_needs_owner(head: &str) -> String {
-    format!("파생 필드 '{head}'의 수식어가 단일하지 않음")
+    format!("파생 필드 '{head}'에 소유자가 없음")
+}
+
+pub fn noun_owner_only(head: &str) -> String {
+    format!("파생 필드 '{head}'는 소유자 외의 구절을 받을 수 없음")
 }
 
 pub fn head_not_phrase(found: &str) -> String {
@@ -228,6 +232,10 @@ pub fn module_not_taken(module: &str) -> String {
     format!("모듈 '{module}' 가져오지 않음")
 }
 
+pub fn not_one_arg(verb: &str) -> String {
+    format!("'{verb}'는 인자 하나로 호출할 수 없음")
+}
+
 pub fn wrong_particles(verb: &str, used: &str) -> String {
     format!("'{verb}'는 조사 [{used}]으로 호출할 수 없음")
 }
@@ -262,11 +270,21 @@ pub fn module_missing(module: &str) -> String {
 
 pub const MISSING_PERIOD: &str = "'.'가 없음";
 
+pub const FORMAT_FAILED: &str = "서식을 고칠 수 없음";
+
 pub fn overflow(verb: &str) -> String {
-    format!("'{verb}'의 결과가 정수 범위를 초과함")
+    format!("'{verb}'의 결과가 수 범위를 초과함")
+}
+
+pub fn literal_overflow(raw: &str) -> String {
+    format!("수 범위를 초과함: {raw}")
 }
 
 pub const DIV_ZERO: &str = "0으로 나눌 수 없음";
+
+pub fn negative_root(shown: &str) -> String {
+    format!("'제곱근'의 대상이 음수: {shown}")
+}
 
 pub fn arg_not_number(verb: &str, kind: &str, shown: &str) -> String {
     format!("'{verb}'의 인자가 수가 아님: {kind} {shown}")
@@ -344,6 +362,8 @@ pub const USAGE: &str = "\
   saeromc <파일.sr> [-o <출력>] [-O0] [-g]
   saeromc --check <파일.sr>
   saeromc --emit-llvm <파일.sr>
+  saeromc --format <파일.sr>
+  saeromc --lsp
 ";
 
 pub fn source_unreadable(path: &str, why: &str) -> String {

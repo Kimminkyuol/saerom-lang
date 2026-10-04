@@ -36,8 +36,9 @@ impl Ty {
 #[derive(Default)]
 pub struct Fields {
     kind: Option<Symbol>,
-    length: Option<Symbol>,
+    pub length: Option<Symbol>,
     names: Option<Symbol>,
+    pub root: Option<Symbol>,
 }
 
 pub struct Types {
@@ -72,7 +73,13 @@ impl Types {
             Expr::Table(..) => Ty::Table,
             Expr::Template(_) => Ty::Str,
             Expr::Field { owner, field, .. } => self.field(function, owner, *field),
-            Expr::Index { .. } | Expr::Pick { .. } => Ty::Any,
+            // 글의 자리는 늘 글이다. 범위 밖이면 멈춘다.
+            Expr::Index { owner, .. } => match self.of(function, owner) {
+                Ty::Str => Ty::Str,
+                Ty::Never => Ty::Never,
+                _ => Ty::Any,
+            },
+            Expr::Pick { .. } => Ty::Any,
             Expr::Call { callee, args, .. } => self.call(function, *callee, args),
             Expr::Not(_) | Expr::Ask { .. } | Expr::And(..) | Expr::Or(..) => Ty::Bool,
         }
@@ -84,11 +91,17 @@ impl Types {
         if found == self.fields.kind {
             return Ty::Str;
         }
+        if held == Ty::Never {
+            return Ty::Never;
+        }
         if found == self.fields.length && matches!(held, Ty::Table | Ty::Str) {
             return Ty::Int;
         }
         if found == self.fields.names && held == Ty::Table {
             return Ty::Table;
+        }
+        if found == self.fields.root && held.number() {
+            return Ty::Float;
         }
         if let Some(candidates) = self.nouns.get(&field) {
             if matches!(held, Ty::Int | Ty::Float | Ty::Bool) {
@@ -113,10 +126,11 @@ impl Types {
             Builtin::Read | Builtin::Open | Builtin::Write => Ty::Any,
             Builtin::Close => Ty::Nothing,
             Builtin::Clone => arg(0),
-            Builtin::Sort => Ty::Table,
+            Builtin::Sort | Builtin::SortBy | Builtin::Args => Ty::Table,
             Builtin::Convert => self.converted(function, args),
             Builtin::Add => match (arg(0), arg(1)) {
                 (Ty::Str, _) => Ty::Str,
+                (Ty::Never, _) => Ty::Never,
                 (a, b) => arithmetic(a, b),
             },
             Builtin::Push | Builtin::Insert | Builtin::RemoveAt | Builtin::RemoveKey => {
@@ -125,7 +139,7 @@ impl Types {
             Builtin::Sub | Builtin::Mul | Builtin::Rem => arithmetic(arg(0), arg(1)),
             // 나누다는 늘 실수. 몫은 정수끼리면 정수.
             Builtin::Div => Ty::Float,
-            Builtin::Neg if arg(0).number() => arg(0),
+            Builtin::Neg if arg(0).number() || arg(0) == Ty::Never => arg(0),
             Builtin::Neg => Ty::Any,
             Builtin::Quot => arithmetic(arg(0), arg(1)),
         }
@@ -150,8 +164,10 @@ impl Types {
     }
 }
 
+// 아직 모르는 쪽이 있으면 결과도 아직 모른다. 성급히 Any 로 올리면 고정점이 거기 갇힌다.
 fn arithmetic(left: Ty, right: Ty) -> Ty {
     match (left, right) {
+        (Ty::Never, _) | (_, Ty::Never) => Ty::Never,
         (Ty::Int, Ty::Int) => Ty::Int,
         (a, b) if a.number() && b.number() => Ty::Float,
         _ => Ty::Any,
@@ -166,6 +182,7 @@ pub fn infer(program: &Program) -> Types {
         kind: named("자료형"),
         length: named("길이"),
         names: named("명칭"),
+        root: named("제곱근"),
     };
     let mut nouns: HashMap<Symbol, Vec<FuncId>> = HashMap::new();
     for module in &program.modules {
@@ -294,7 +311,12 @@ fn walk(
             Stmt::Each {
                 place, over, body, ..
             } => {
-                assign(types, function, *place, Ty::Any, moved);
+                let element = match types.of(function, over) {
+                    Ty::Str => Ty::Str,
+                    Ty::Never => Ty::Never,
+                    _ => Ty::Any,
+                };
+                assign(types, function, *place, element, moved);
                 visit(types, program, function, over, moved);
                 walk(types, program, function, body, moved);
             }
@@ -330,8 +352,8 @@ fn walk(
                 if let Some(step) = step {
                     found = found.join(types.of(function, step));
                 }
-                let element = if found == Ty::Int {
-                    Ty::Int
+                let element = if found == Ty::Int || found == Ty::Never {
+                    found
                 } else if found.number() {
                     Ty::Float
                 } else {
@@ -427,6 +449,14 @@ fn visit(
             visit(types, program, function, right, moved);
         }
         Expr::Call { callee, args, .. } => {
+            if let (Callee::Op(Builtin::SortBy), [_, item, _]) = (callee, args.as_slice()) {
+                let place = match item {
+                    Expr::Local(slot) => Place::Local(*slot),
+                    Expr::Global(slot) => Place::Global(*slot),
+                    _ => unreachable!("숨은 칸"),
+                };
+                assign(types, function, place, Ty::Any, moved);
+            }
             for arg in args {
                 visit(types, program, function, arg, moved);
             }
@@ -580,7 +610,7 @@ fn check_expr(
     let table_verb = match op {
         Builtin::Push => Some("추가하다"),
         Builtin::Insert => Some("삽입하다"),
-        Builtin::Sort => Some("정렬하다"),
+        Builtin::Sort | Builtin::SortBy => Some("정렬하다"),
         Builtin::RemoveAt | Builtin::RemoveKey => Some("제거하다"),
         _ => None,
     };

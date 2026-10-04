@@ -4,11 +4,13 @@ mod builtins;
 pub mod diag;
 pub mod dump;
 mod emit;
+mod format;
 pub mod hangul;
 mod hir;
 mod intern;
 mod lex;
 mod load;
+pub mod lsp;
 mod parse;
 mod prescan;
 mod resolve;
@@ -34,7 +36,7 @@ impl Failure {
             None => self
                 .errors
                 .iter()
-                .map(|error| error.render(source, path))
+                .map(|error| error.render(&lex::ready(source), path))
                 .collect::<Vec<_>>()
                 .join("\n"),
         };
@@ -46,6 +48,10 @@ impl Failure {
         }
         out
     }
+}
+
+pub fn format(source: &str, base_dir: Option<&Path>) -> diag::Result<String> {
+    format::format(source, base_dir)
 }
 
 pub fn tokens(source: &str, base_dir: Option<&Path>) -> diag::Result<Vec<lex::Token>> {

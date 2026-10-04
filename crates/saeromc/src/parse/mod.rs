@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::diag::{Diag, Result, Span};
-use crate::hangul::{Ending, Pos};
+use crate::hangul::Ending;
 use crate::lex::{tokenize, Num, Part, Tok, Token};
 use crate::msg;
 use crate::prescan::{resolve_module, Program};
@@ -27,6 +27,7 @@ pub fn parse<'a>(
         base_dir,
         errors: Vec::new(),
         inside: false,
+        verb_params: Vec::new(),
         plan: Vec::new(),
         picks: Vec::new(),
         stuck: false,
@@ -45,6 +46,8 @@ struct Parser<'a> {
     base_dir: Option<&'a Path>,
     errors: Vec<Diag>,
     inside: bool,
+    // 정의 안의 동사 자리. 무엇이 올지 몰라 조사 맞춤을 따지지 않는다.
+    verb_params: Vec<String>,
     // 용언마다 "몇 번째로 긴 묶기를 고를지". 되짚기가 이 벡터를 돌린다.
     plan: Vec<usize>,
     picks: Vec<usize>,
@@ -54,7 +57,6 @@ struct Parser<'a> {
 #[derive(Clone)]
 struct VerbInfo {
     name: String,
-    pos: Pos,
     ending: Ending,
     negated: bool,
     span: Span,
@@ -408,5 +410,5 @@ mod expr;
 mod stmt;
 
 fn not_dictionary_form(span: Span) -> Diag {
-    Diag::syntax(msg::HEAD_NOT_DICT, span).with_hint(msg::HEAD_NOT_DICT_HELP)
+    Diag::syntax(msg::HEAD_NOT_DICT, span)
 }

@@ -1,6 +1,6 @@
 //! 표시하고 쓸기: 힙 사슬, 뿌리, 안전 지점.
 
-use crate::value::{Table, Value, STR, TABLE};
+use crate::value::{Table, Text, Value, STR, TABLE};
 use std::cell::UnsafeCell;
 
 // 뿌리: 전역 자리 목록과 함수마다의 자리 목록.
@@ -58,6 +58,9 @@ struct Heap {
     first: *mut Head,
     count: usize,
     limit: usize,
+    // 쓸어낸 글 객체. 크기가 같아 다음 글이 그대로 쓴다.
+    // ponytail: 가장 많던 때만큼 쥐고 놓지 않는다. 메모리가 문제면 상한을 둔다.
+    spare: *mut Head,
 }
 
 struct Cell(UnsafeCell<Heap>);
@@ -69,6 +72,7 @@ static HEAP: Cell = Cell(UnsafeCell::new(Heap {
     first: std::ptr::null_mut(),
     count: 0,
     limit: FIRST_LIMIT,
+    spare: std::ptr::null_mut(),
 }));
 
 // 런타임은 홀실이라 갈래 다툼이 없다.
@@ -85,9 +89,26 @@ pub fn hold<T>(kind: u64, payload: T) -> u64 {
         },
         payload,
     }));
+    link(made as *mut Head)
+}
+
+pub fn hold_text(payload: Text) -> u64 {
     let heap = heap();
-    unsafe { (*made).head.next = heap.first };
-    heap.first = made as *mut Head;
+    if heap.spare.is_null() {
+        return hold(STR, payload);
+    }
+    let made = heap.spare as *mut Obj<Text>;
+    unsafe {
+        heap.spare = (*made).head.next;
+        std::ptr::write(&mut (*made).payload, payload);
+    }
+    link(made as *mut Head)
+}
+
+fn link(made: *mut Head) -> u64 {
+    let heap = heap();
+    unsafe { (*made).next = heap.first };
+    heap.first = made;
     heap.count += 1;
     made as u64
 }
@@ -150,7 +171,12 @@ fn collect(roots: impl Iterator<Item = *mut Value>) {
 
 unsafe fn release(head: *mut Head) {
     match (*head).kind {
-        STR => drop(Box::from_raw(head as *mut Obj<String>)),
+        STR => {
+            std::ptr::drop_in_place(&mut (*(head as *mut Obj<Text>)).payload);
+            let heap = heap();
+            (*head).next = heap.spare;
+            heap.spare = head;
+        }
         _ => drop(Box::from_raw(head as *mut Obj<UnsafeCell<Table>>)),
     }
 }

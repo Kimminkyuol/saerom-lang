@@ -92,6 +92,12 @@ impl Signatures {
             .any(|name| name == verb)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &[Signature])> {
+        self.0
+            .iter()
+            .map(|(verb, ways)| (verb.as_str(), ways.as_slice()))
+    }
+
     pub fn knows(&self, verb: &str) -> bool {
         self.0.contains_key(verb)
     }

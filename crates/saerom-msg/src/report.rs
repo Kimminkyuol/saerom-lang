@@ -59,10 +59,6 @@ pub fn plain(kind: &str, message: &str) -> String {
     format!("{}: {}\n", red(kind), bold(message))
 }
 
-pub fn note(message: &str) -> String {
-    format!("{}: {message}\n", bold(msg::NOTE))
-}
-
 pub fn red(text: &str) -> String {
     tint("\x1b[1;31m", text)
 }

@@ -1,12 +1,17 @@
 {
   "name": "saerom",
   "displayName": "새롬",
-  "description": "새롬 언어 문법 강조",
+  "description": "새롬 언어 지원",
   "version": "0.1.0",
   "publisher": "saerom",
   "license": "MIT",
-  "engines": { "vscode": "^1.75.0" },
+  "engines": { "vscode": "^1.91.0" },
   "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:saerom"],
+  "dependencies": {
+    "vscode-languageclient": "^10.1.2"
+  },
   "contributes": {
     "languages": [
       {
@@ -22,6 +27,53 @@
         "scopeName": "source.saerom",
         "path": "./syntaxes/saerom.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "새롬",
+      "properties": {
+        "saerom.compiler": {
+          "type": "string",
+          "default": "",
+          "description": "saeromc 경로. 비우면 ~/.local/bin과 작업 폴더의 target 중 가장 새것, 없으면 PATH."
+        }
+      }
+    },
+    "commands": [
+      { "command": "saerom.run", "title": "실행", "category": "새롬", "icon": "$(play)" },
+      { "command": "saerom.restart", "title": "언어 서버 다시 시작", "category": "새롬" }
+    ],
+    "menus": {
+      "editor/title/run": [
+        { "command": "saerom.run", "when": "editorLangId == saerom" }
+      ],
+      "commandPalette": [
+        { "command": "saerom.run", "when": "editorLangId == saerom" }
+      ]
+    },
+    "keybindings": [
+      { "command": "saerom.run", "key": "ctrl+f5", "mac": "cmd+f5", "when": "editorLangId == saerom" }
+    ],
+    "semanticTokenTypes": [
+      { "id": "particle", "superType": "keyword", "description": "조사" },
+      { "id": "copula", "superType": "keyword", "description": "이다" }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "saerom",
+        "scopes": {
+          "particle": ["storage.modifier.particle.saerom"],
+          "copula": ["storage.modifier.copula.saerom"],
+          "function": ["entity.name.function.saerom"],
+          "function.defaultLibrary": ["entity.name.function.saerom"],
+          "property.defaultLibrary": ["support.variable.property.saerom"],
+          "keyword": ["keyword.control.definition.saerom"]
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[saerom]": {
+        "editor.semanticHighlighting.enabled": true
+      }
+    }
   }
 }

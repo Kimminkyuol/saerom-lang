@@ -1,18 +1,67 @@
 {
-  "comments": { "lineComment": "#" },
-  "brackets": [["(", ")"]],
-  "autoClosingPairs": [
-    { "open": "(", "close": ")" },
-    { "open": "\"", "close": "\"", "notIn": ["string"] },
-    { "open": "{", "close": "}", "notIn": ["comment"] }
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    [
+      "(",
+      ")"
+    ]
   ],
-  "surroundingPairs": [["(", ")"], ["\"", "\""], ["{", "}"]],
+  "autoClosingPairs": [
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string"
+      ]
+    },
+    {
+      "open": "{",
+      "close": "}",
+      "notIn": [
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "{",
+      "}"
+    ]
+  ],
   "wordPattern": "[가-힣A-Za-z0-9_]+",
   "indentationRules": {
     "increaseIndentPattern": ":\\s*(#.*)?$",
     "decreaseIndentPattern": "^\\s*(아니면|아니고)\\b"
   },
   "onEnterRules": [
-    { "beforeText": ":\\s*(#.*)?$", "action": { "indent": "indent" } }
-  ]
+    {
+      "beforeText": ":\\s*(#.*)?$",
+      "action": {
+        "indent": "indent"
+      }
+    },
+    {
+      "beforeText": "^\\s*(.*(반환한다|종료한다)|빠져나간다|넘어간다)\\.\\s*(#.*)?$",
+      "action": {
+        "indent": "outdent"
+      }
+    }
+  ],
+  "folding": {
+    "offSide": true
+  }
 }
